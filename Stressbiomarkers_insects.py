@@ -15,9 +15,9 @@ from pdfminer.high_level import extract_text
 import requests
 
 # Paths (update as needed)
-PDF_DIR = r"C:/Users/maxmu/OneDrive/Documenten/Entometabolomics/Stressbiomarkers_insects/pdfs_big"
-HMDB_PATH = r"C:/Users/maxmu/OneDrive/Documenten/Entometabolomics/Stressbiomarkers_insects/hmdb_metabolites/metabolites-2025-06-20.txt"
-TAXON_PATH = r"C:/Users/maxmu/OneDrive/Documenten/Entometabolomics/Stressbiomarkers_insects/Taxon/Taxon.txt"
+PDF_DIR = r".../Stressbiomarkers_insects/pdfs"
+HMDB_PATH = r".../hmdb_metabolites/metabolites-2025-06-20.txt"
+TAXON_PATH = r".../Stressbiomarkers_insects/Taxon/Taxon.txt"
 LOG_PATH = "skipped_papers.log"
 OUTPUT_XLSX = "metabolite_results.xlsx"
 
@@ -165,3 +165,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
