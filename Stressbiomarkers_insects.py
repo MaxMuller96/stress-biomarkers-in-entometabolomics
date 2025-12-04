@@ -1,163 +1,556 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Tue Jul 15 14:24:33 2025
-
-@author: maxmu
-"""
-
 import os
 import re
 import csv
+import sys
 import logging
+import unicodedata
+import urllib.parse
+from collections import defaultdict, Counter
+from functools import lru_cache
+
 import pandas as pd
-from tqdm import tqdm
 from pdfminer.high_level import extract_text
 import requests
 
+csv.field_size_limit(sys.maxsize)
+
 # Paths (update as needed)
-PDF_DIR = r".../Stressbiomarkers_insects/pdfs"
+PDF_DIR = r".../pdfs"
 HMDB_PATH = r".../hmdb_metabolites/metabolites-2025-06-20.txt"
-TAXON_PATH = r".../Stressbiomarkers_insects/Taxon/Taxon.txt"
+TAXON_PATH = r".../Taxon/Taxon.txt"
 LOG_PATH = "skipped_papers.log"
 OUTPUT_XLSX = "metabolite_results.xlsx"
+
+# List or set of PDF filenames for which to enable debug output
+# Add PDF filenames (e.g. {'file1.pdf', 'file2.pdf'}) to enable debug for specific files
+# Leave as empty set for no debug output
+
+debug_pdfs = set()
 
 # Setup logging
 logging.basicConfig(filename=LOG_PATH, level=logging.INFO, format='%(asctime)s %(message)s')
 
+# Pre-compiled regex patterns for better performance
+_normalize_re = re.compile(r'[-–—,;:\s]')
+_word_re = re.compile(r'\b\w+\b')
+_hyphen_break_re = re.compile(r'-\s*\n\s*')
+_doi_re = re.compile(r"10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.IGNORECASE)
+_element_re = re.compile(r'[A-Z][a-z]?')
+_stress_re = re.compile(r'\b(?:\w+\s)?(?:stress|tolerance)\b', re.IGNORECASE)
+_insect_species_re = re.compile(r'\b[A-Z][a-z]{2,}\s*[ \n\r\t]+\s*[a-z]{3,}\b')
+_abbrev_species_re = re.compile(r'\b([A-Z])\.\s*([a-z]{3,})\b')
+_whitespace_re = re.compile(r'\s+')
+_non_alpha_space_re = re.compile(r'[^a-z ]')
+_parentheses_re = re.compile(r'\s*\(.*?\)\s*')
+
+@lru_cache(maxsize=4096)
 def normalize(text):
     # Remove hyphens, delimiters, spaces, dashes, etc., and lowercase
-    return re.sub(r'[-–—,;:\s]', '', text.lower())
+    return _normalize_re.sub('', text.lower())
 
 def extract_words(text):
     # Remove hyphens at line breaks, normalize, and extract words
-    text = re.sub(r'-\s*\n\s*', '', text)
-    words = re.findall(r'\b\w+\b', text)
+    text = _hyphen_break_re.sub('', text)
+    words = _word_re.findall(text)
     return [w for w in words if len(w) >= 3]
+
+def extract_doi(text):
+    """Extracts all DOI strings from the given text."""
+    return _doi_re.findall(text)
+
+def is_single_element(formula):
+    # Returns True if the formula contains only one type of element (e.g., 'H2', 'O2')
+    return len(_element_re.findall(formula)) == 1
+
 
 def load_hmdb(path):
     db = {}
     with open(path, encoding='utf-8') as f:
         reader = csv.DictReader(f, delimiter=',')
         for row in reader:
-            name_norm = normalize(row['name'])
+            name_norm = normalize(row['NAME'])
             db[name_norm] = row
     return db
+
+def normalize_text(text):
+    return unicodedata.normalize("NFKD", text)
+
+@lru_cache(maxsize=4096)
+def normalize_insect_name(name):
+    name = normalize_text(name)
+    name = _whitespace_re.sub(' ', name)  # Collapse all whitespace to a single space
+    name = name.strip().lower()
+    name = _parentheses_re.sub('', name)
+    name = _non_alpha_space_re.sub('', name)
+    name = ' '.join(name.split()[:2])
+    return name
 
 def load_taxon(path):
     insects = set()
     with open(path, encoding='utf-8') as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                insects.add(line.lower())
+        reader = csv.DictReader(f, delimiter='\t')
+        for row in reader:
+            if row.get('class', '').strip().lower() == 'insecta':
+                name = row.get('scientificName', '')
+                norm_name = normalize_insect_name(name)
+                if norm_name:
+                    insects.add(norm_name)
     return insects
 
+from functools import lru_cache
+
+import requests
+from functools import lru_cache
+
+# Simple in-memory cache for requests responses
+_requests_cache = {}
+
+@lru_cache(maxsize=2048)
 def get_logp(inchikey):
     # PubChem REST API
     url = f'https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/inchikey/{inchikey}/property/XLogP/JSON'
+    if url in _requests_cache:
+        return _requests_cache[url]
     try:
         r = requests.get(url, timeout=10)
         if r.ok:
             props = r.json()['PropertyTable']['Properties'][0]
-            return props.get('XLogP', None)
+            value = props.get('XLogP', None)
+            _requests_cache[url] = value
+            return value
     except Exception:
         pass
     return None
 
+import urllib.parse
+
+@lru_cache(maxsize=2048)
 def get_npclassifier_superclass(smiles, inchikey):
-    # NPClassifier API (example endpoint)
-    url = 'https://npclassifier.ucsd.edu/classify'
-    try:
-        r = requests.post(url, json={'smiles': smiles or '', 'inchikey': inchikey or ''}, timeout=10)
-        if r.ok:
+    # NPClassifier API (GET request with fallback)
+    result = None
+    if smiles:
+        url = f"https://npclassifier.ucsd.edu/classify?smiles={urllib.parse.quote(smiles)}"
+        if url in _requests_cache:
+            return _requests_cache[url]
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+            }
+            logging.debug(f"NPClassifier GET request: {url}")
+            r = requests.get(url, headers=headers, timeout=15)
+            r.raise_for_status()
             data = r.json()
-            return data.get('superclass', None)
-    except Exception:
-        pass
-    return None
+            logging.debug(f"NPClassifier GET response: {data}")
+            # Handle NPClassifier response format
+            if "superclass" in data:
+                result = data["superclass"][0] if data["superclass"] else ""
+            elif "superclass_results" in data:
+                result = data["superclass_results"][0] if data["superclass_results"] else ""
+            _requests_cache[url] = result
+        except Exception as e:
+            logging.exception(f"NPClassifier error: {str(e)}")
+    return result
+
+def spaced_re(s):
+    # Generate a regex to match section headers with arbitrary whitespace and case-insensitivity
+    return ''.join(f'{c}[\s]*' for c in s)
 
 def extract_sections(text):
-    # Extract sections: results, abstract, materials and methods
-    pattern = r'(abstract|results|materials and methods)(.*?)(?=\n[A-Z][A-Za-z ]{3,}:|\Z)'  # crude section splitter
+    """Split the full article text into coarse sections.
+
+    Detection strategy:
+    1. Iterate line-by-line; if a line (after stripping) matches one of the known
+       headers (case-insensitive, ignoring spaces and punctuation) we start a new
+       section.
+    2. Lines that are in ALL CAPS and longer than 3 chars are also considered
+       potential generic headers (used by some journals).
+    3. Merged headers such as "Results and Discussion" or "Results & Discussion"
+       are normalised and mapped to the canonical name "results".
+    This approach avoids a heavy multi-line regex and therefore uses less CPU
+    and memory on large PDFs.
+    """
+    known_headers = {
+        'abstract': 'abstract',
+        'introduction': 'introduction',
+        'materials and methods': 'materialsandmethods',
+        'material and methods': 'materialsandmethods',
+        'methods': 'materialsandmethods',
+        'results': 'results',
+        'keywords': 'keywords',
+        'discussion': 'discussion',
+        'conclusion': 'conclusion',
+        'references': 'references',
+    }
+
+    # Map merged variations to results
+    merged_variants = [
+        'results and discussion',
+        'results & discussion',
+        'results discussion'
+    ]
+
+    sections: dict[str, str] = {}
+    current_header = 'preamble'
+    buffer_lines: list[str] = []
+
+    def flush():
+        if buffer_lines:
+            sections[current_header] = '\n'.join(buffer_lines).strip()
+            buffer_lines.clear()
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            buffer_lines.append(raw_line)
+            continue
+        # Normalise the line for header comparison
+        norm = re.sub(r'[^a-z& ]', '', line.lower())
+        norm = re.sub(r'\s+', ' ', norm).strip()
+        if norm in merged_variants:
+            flush()
+            current_header = 'results'  # treat merged header as results
+            continue
+        if norm in known_headers:
+            flush()
+            current_header = known_headers[norm]
+            continue
+        # ALL CAPS heuristic (section header without punctuation)
+        if line.isupper() and len(line) >= 3 and len(line.split()) <= 6:
+            flush()
+            current_header = re.sub(r'\s+', '', line.lower())
+            continue
+        buffer_lines.append(raw_line)
+    # flush the last section
+    flush()
+
+    # If results missing but discussion exists (merged later), copy discussion
+    if 'results' not in sections and 'discussion' in sections:
+        sections['results'] = sections['discussion']
+
+    return sections
+    # Build a regex pattern to match section headers with arbitrary spaces and case
+    section_names = [
+        'abstract',
+        'results',
+        'material and methods',
+        'keywords',
+        # merged headers
+        'results and discussion',
+        'results & discussion',
+        'results discussion'
+    ]
+    patterns = [spaced_re(s) for s in section_names]
+    # Join all patterns with | for alternation
+    header_pattern = '(' + '|'.join(patterns) + ')'
+    # Section ends at a line that looks like a new header or end of string
+    pattern = header_pattern + r'(.*?)(?=\n[A-Z][A-Za-z ]{3,}:|\Z)'
     sections = {}
     for match in re.finditer(pattern, text, re.IGNORECASE | re.DOTALL):
-        sections[match.group(1).lower()] = match.group(2)
+        # Normalize header by removing spaces and lowering case
+        header_raw = re.sub(r'\s+', ' ', match.group(1)).strip().lower()
+        header = header_raw.replace('&', 'and').replace('  ', ' ')
+        header = re.sub(r'[^a-z ]', '', header)
+        # Map merged results+discussion header to 'results'
+        if header.startswith('results') and 'discussion' in header:
+            header = 'results'
+        sections[header] = match.group(2)
+    # --- Add discussion section if not present, by normalized word ---
+    # Ensure discussion section is detected or inferred
+    if 'discussion' not in sections:
+        # Normalize text for search
+        norm_text = re.sub(r'\s+', '', text).lower()
+        idx = norm_text.find('discussion')
+        if idx != -1:
+            # Find corresponding index in original text
+            # Go through original text, skipping whitespace, to find the char index
+            count = 0
+            orig_idx = None
+            for i, c in enumerate(text):
+                if not c.isspace():
+                    if count == idx:
+                        orig_idx = i
+                        break
+                    count += 1
+            if orig_idx is not None:
+                sections['discussion'] = text[orig_idx:]
+    # If results section is still missing but discussion exists, treat discussion as results (merged section)
+    if 'results' not in sections and 'discussion' in sections:
+        sections['results'] = sections['discussion']
     return sections
 
-def extract_insect_species(section_text, insect_db):
-    # Regex: \b[A-Z][a-z]{2,} [a-z]{3,}\b
+def extract_insect_species(section_text, insect_db, debug_pdf=None):
     found = set()
-    for match in re.findall(r'\b[A-Z][a-z]{2,} [a-z]{3,}\b', section_text):
-        if match.lower() in insect_db:
-            found.add(match)
-    return list(found)
+    candidates = []
+    genus_species_in_db = set()  # Genus for which a genus-species pair is present in the DB
+    genus_species_matches = set()
+    # Find genus-species pairs
+    for match in re.findall(r'\b[A-Z][a-z]{2,}\s*[ \n\r\t]+\s*[a-z]{3,}\b', section_text):
+        norm_match = normalize_text(match)
+        norm_match = normalize_insect_name(norm_match)
+        candidates.append((match, norm_match))
+        if norm_match in insect_db:
+            genus_species_matches.add(match)
+            genus_species_in_db.add(norm_match.split()[0])
+    # Find abbreviated genus-species pairs, e.g. D. melanogaster
+    abbrev_matches = re.findall(r'\b([A-Z])\.\s*([a-z]{3,})\b', section_text)
+    # Build genus initial -> genus name map from taxon DB
+    genus_map = {}
+    for name in insect_db:
+        genus = name.split()[0] if ' ' in name else name
+        if genus and len(genus) > 0:
+            genus_map.setdefault(genus[0], set()).add(genus)
+    abbrev_matches_found = set()
+    for initial, species in abbrev_matches:
+        initial = initial.lower()
+        for genus in genus_map.get(initial, []):
+            norm_abbrev = f"{genus} {species}"
+            if norm_abbrev in insect_db:
+                abbrev_matches_found.add(f"{genus} {species}")
+                genus_species_in_db.add(genus)
+                candidates.append((f"{initial.upper()}. {species}", norm_abbrev))
+    # Find single-word genus matches (capitalized, at least 3 letters)
+    genus_only_matches = set()
+    for genus in re.findall(r'\b[A-Z][a-z]{2,}\b', section_text):
+        genus_norm = normalize_text(genus)
+        genus_norm = normalize_insect_name(genus_norm)
+        # Only add genus if no genus-species pair for this genus is present in the DB
+        if genus_norm and genus_norm in insect_db and genus_norm not in genus_species_in_db:
+            genus_only_matches.add(genus)
+    if debug_pdf:
+        logging.info(f"DEBUG: Candidates in {debug_pdf}: {candidates}")
+        logging.info(f"DEBUG: insect_db sample: {list(sorted(insect_db))[:50]}")
+    # Prefer full genus-species matches
+    if genus_species_matches:
+        return list(genus_species_matches)
+    elif abbrev_matches_found:
+        return list(abbrev_matches_found)
+    elif genus_only_matches:
+        # Only return genus-species pairs that were actually matched in this PDF (from this extraction)
+        # This means: only genus-species pairs found in this run, not all from the DB
+        # If no genus-species or abbrev found, genus_only_matches are returned as-is
+        return []
+    else:
+        return []
+
+
+_stress_re = re.compile(r'\b(?:\w+\s)?(?:stress|tolerance)\b', re.IGNORECASE)
+# List of common/irrelevant words to exclude from stress sources
+COMMON_STRESS_WORDS = set([
+    'eukaryotic','certain','s','anol','against','different','time','this','mass','produce','fects','tive','induced','cross','facilitated','factors','better','high','higher','strong','weak','under','vation','increased','decreased','tion','its','it','itself','have','has','had','is','are','was','were','be','been','being','do','does','did','will','shall','can','could','may','might','must','should','the', 'a', 'in', 'to', 'of', 'for', 'by', 'with', 'as', 'on', 'at', 'from', 'and', 'or', 'nor', 'but', 'so', 'yet', 'all', 'any', 'during', 'meets', 'multiple', 'post', 'subsequent', 'when', 'adverse', 'affects', 'all', 'although', 'among', 'analysis', 'avoid', 'broadens', 'causes', 'causing', 'confers', 'controlling', 'critical', 'dative', 'different', 'greater', 'hardening', 'ical', 'idative', 'improved', 'induce', 'induces', 'lution', 'mal', 'mediate', 'otic', 'pathways', 'severe', 'showed', 'stronger', 'sublethal', 'term', 'their', 'that', 'upon', 'various', 'lution', 'avoid'
+])
 
 def extract_stress_sources(text):
-    # Regex: \b(?:\w+ )?stress\b
-    return list(set(re.findall(r'\b(?:\w+ )?stress\b', text, re.IGNORECASE)))
+    # Match 'oxidative stress', 'cold tolerance', etc. (one word before or just the keyword)
+    matches = _stress_re.findall(text)
+    # Remove 'tolerance' and 'stress', normalize and deduplicate
+    sources = set()
+    for m in matches:
+        cleaned = m.lower().replace('tolerance', '').replace('stress', '')
+        cleaned = cleaned.strip().replace('-', ' ').replace('_', ' ')
+        cleaned = ' '.join(cleaned.split())  # collapse multiple spaces
+        if cleaned:
+            sources.add(cleaned)
+    # Remove common/irrelevant words
+    filtered_sources = [s for s in sources if s not in COMMON_STRESS_WORDS]
+    # Deduplicate and return as sorted list
+    return sorted(filtered_sources)
 
-def extract_doi(text):
-    # Regex: \b10\.\d{4,9}/[-._;()/:A-Z0-9]+\b
-    return re.findall(r'\b10\.\d{4,9}/[-._;()/:A-Z0-9]+\b', text, re.IGNORECASE)
 
-def is_single_element(formula):
-    # Only 1 element, e.g. 'Cl', 'C', 'O2' (<=2 letters)
-    return len(re.findall(r'[A-Z][a-z]?', formula)) == 1
+from functools import lru_cache
 
-def process_pdf(pdf_path, hmdb_db, insect_db):
-    text = extract_text(pdf_path)
-    words = extract_words(text)
-    norm_words = set(normalize(w) for w in words)
-    # Match metabolites
-    matched = [hmdb_db[w] for w in norm_words if w in hmdb_db]
-    matched = [m for m in matched if not is_single_element(m['Chemical_Formula'])]
-    if not matched:
-        logging.info(f"No metabolites found in {os.path.basename(pdf_path)}")
-        return None
-    # Extract sections
+# Cache extracted text for debug PDFs (by path)
+@lru_cache(maxsize=128)
+def _cached_extract_text(pdf_path):
+    return extract_text(pdf_path)
+
+def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
+    pdf_name = os.path.basename(pdf_path)
+    # Use cache for debug PDFs
+    if pdf_name in debug_pdfs:
+        text = _cached_extract_text(pdf_path)
+    else:
+        text = extract_text(pdf_path)
     sections = extract_sections(text)
-    relevant_text = ' '.join(sections.get(s, '') for s in ['abstract', 'results', 'materials and methods'])
-    # Insect species
-    insect_species = extract_insect_species(relevant_text, insect_db)
-    if not insect_species:
-        logging.info(f"No insect species found in {os.path.basename(pdf_path)}; metabolites removed")
+    # Use the first 10 non-empty lines as the title block
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    title_block = ' '.join(lines[:10])
+    # Build relevant text for metabolite extraction.
+    # Prefer 'results'; if it's missing (often merged as 'results and discussion'), fall back to 'discussion'.
+    results_text = sections.get('results', '')
+    if not results_text.strip():
+        results_text = sections.get('discussion', '')
+    metabolite_sections = [
+        title_block,
+        sections.get('abstract', ''),
+        results_text,
+        sections.get('materialsandmethods', ''),
+        sections.get('keywords', '')
+    ]
+    relevant_metabolite_text = ' '.join(metabolite_sections)
+    # Build relevant text for insect species extraction (exclude discussion, conclusion)
+    insect_sections = [
+        title_block,
+        sections.get('abstract', ''),
+        sections.get('results', ''),
+        sections.get('materialsandmethods', ''),
+        sections.get('keywords', ''),
+        sections.get('introduction', '')
+    ]
+    relevant_insect_text = ' '.join(insect_sections)
+    # Extract words for metabolite search only from allowed sections
+    words = extract_words(relevant_metabolite_text)
+    norm_words = set(normalize(w) for w in words)
+    if pdf_name in debug_pdfs:
+        print(f"[DEBUG] Total words: {len(words)} | Unique normalized words: {len(norm_words)}")
+        print(f"[DEBUG] Sample words: {[repr(w) for w in words[:50]]}")
+        print(f"[DEBUG] Sample normalized words: {[repr(w) for w in list(norm_words)[:50]]}")
+    matched = [hmdb_db[w] for w in norm_words if w in hmdb_db]
+    if pdf_name in debug_pdfs:
+        print(f"[DEBUG] Initial matched count (before single-element filter): {len(matched)}")
+    matched = [m for m in matched if not is_single_element(m['CHEMICAL_FORMULA'])]
+    if not matched:
+        logging.info(f"No metabolites found in {os.path.basename(pdf_path)}; skipping.")
         return None
-    # Stress sources
-    stress_sources = extract_stress_sources(relevant_text)
+    # Insect species from allowed sections
+    insect_species = extract_insect_species(relevant_insect_text, insect_db, debug_pdf=pdf_name if pdf_name in debug_pdfs else None)
+    # If only genus names are found, use the most common species for that genus from the cache
+    normalized_insect_species = []
+    norm_species = [normalize_insect_name(s) for s in insect_species]
+    # If all are single-word (genus only), use genus_to_species_counter
+    if all(' ' not in s for s in norm_species):
+        for genus in norm_species:
+            if genus in genus_to_species_counter and genus_to_species_counter[genus]:
+                most_common = genus_to_species_counter[genus].most_common(1)
+                normalized_insect_species.extend([f"{genus} {species}" for species, _ in most_common])
+    else:
+        normalized_insect_species = sorted(set(norm_species))
+    if pdf_name in debug_pdfs:
+        print(f"[DEBUG] Insect species found: {insect_species}")
+        print("[DEBUG] Normalized insect species candidates and DB presence:")
+        for s in insect_species:
+            norm = normalize_insect_name(s)
+            print(f"    '{s}' (normalized: '{norm}') in DB: {norm in insect_db}")
+        print(f"[DEBUG] Sample normalized insect DB: {list(insect_db)[:50]}")
+    if pdf_name in debug_pdfs:
+        print(f"[DEBUG] Insect species found: {insect_species}")
+        print("[DEBUG] Normalized insect species candidates and DB presence:")
+        for s in insect_species:
+            norm = normalize_insect_name(s)
+            print(f"    '{s}' (normalized: '{norm}') in DB: {norm in insect_db}")
+        print(f"[DEBUG] Sample normalized insect DB: {list(insect_db)[:50]}")
+    if not normalized_insect_species:
+        logging.info(f"No insect species found in {os.path.basename(pdf_path)}; metabolites removed")
+        print(f"[DEBUG] No insect species found, skipping.")
+        return None
+    # Stress sources: can be from all sections
+    relevant_stress_text = ' '.join([
+        title_block,
+        sections.get('abstract', ''),
+        sections.get('results', ''),
+        sections.get('materialsandmethods', ''),
+        sections.get('keywords', ''),
+        sections.get('introduction', ''),
+        sections.get('discussion', ''),
+        sections.get('conclusion', ''),
+        sections.get('references', '')
+    ])
+    stress_sources = extract_stress_sources(relevant_stress_text)
     # DOI
-    dois = extract_doi(text)
+    dois = list(dict.fromkeys(extract_doi(text)))  # Preserve order, deduplicate
+    doi_reference = dois[0] if dois else ''
     # Compile results
     results = []
     for m in matched:
         logp = get_logp(m['INCHIKEY'])
         superclass = get_npclassifier_superclass(m['SMILES'], m['INCHIKEY'])
         results.append({
-            'Metabolite name': m['name'],
-            'Chemical formula': m['Chemical_Formula'],
-            'Average Mass': m['Average_Mass'],
-            'Mono Mass': m['Mono_Mass'],
+            'Metabolite name': m.get('NAME', ''),
+            'CHEMICAL_FORMULA': m.get('CHEMICAL_FORMULA', ''),
+            'Average Mass': m.get('AVERAGE_MASS', ''),
+            'Mono Mass': m.get('MONO_MASS', ''),
             'LogP': logp,
             'superclass': superclass,
-            'stress sources': ', '.join(stress_sources),
-            'insect species': ', '.join(insect_species),
-            'DOI references': ', '.join(dois),
+            'stress sources': ', '.join(sorted(set(s for s in stress_sources if s))),
+            'insect species': ', '.join(normalized_insect_species),
+            'DOI references': doi_reference
         })
+        if pdf_name in debug_pdfs:
+            print(f"[DEBUG] Results: {results}")
     return results
 
+from collections import defaultdict, Counter
+
 def main():
+    from collections import defaultdict, Counter
     hmdb_db = load_hmdb(HMDB_PATH)
     insect_db = load_taxon(TAXON_PATH)
+    pdf_files = [os.path.join(PDF_DIR, f) for f in os.listdir(PDF_DIR) if f.endswith('.pdf')]
+    # First pass: build genus_to_species_counter from all PDFs
+    genus_to_species_counter = defaultdict(Counter)
+    pdf_to_species = {}
+    for pdf in pdf_files:
+        text = extract_text(pdf)
+        sections = extract_sections(text)
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        title_block = ' '.join(lines[:10])
+        insect_sections = [
+            title_block,
+            sections.get('abstract', ''),
+            sections.get('results', ''),
+            sections.get('materialsandmethods', ''),
+            sections.get('keywords', ''),
+            sections.get('introduction', '')
+        ]
+        relevant_insect_text = ' '.join(insect_sections)
+        # Extract all genus-species found in this PDF
+        species_found = []
+        for match in re.findall(r'\b[A-Z][a-z]{2,}\s*[ \n\r\t]+\s*[a-z]{3,}\b', relevant_insect_text):
+            norm_match = normalize_text(match)
+            norm_match = normalize_insect_name(norm_match)
+            if norm_match in insect_db and ' ' in norm_match:
+                genus, species = norm_match.split()[:2]
+                genus_to_species_counter[genus][species] += 1
+                species_found.append(norm_match)
+        # Abbreviated genus-species (e.g. D. melanogaster)
+        abbrev_matches = re.findall(r'\b([A-Z])\.\s*([a-z]{3,})\b', relevant_insect_text)
+        genus_map = {}
+        for name in insect_db:
+            genus = name.split()[0] if ' ' in name else name
+            if genus and len(genus) > 0:
+                genus_map.setdefault(genus[0], set()).add(genus)
+        for initial, species in abbrev_matches:
+            initial = initial.lower()
+            for genus in genus_map.get(initial, []):
+                norm_abbrev = f"{genus} {species}"
+                if norm_abbrev in insect_db:
+                    genus_to_species_counter[genus][species] += 1
+                    species_found.append(norm_abbrev)
+        pdf_to_species[os.path.basename(pdf)] = set(species_found)
+    # Second pass: process each PDF with full genus_to_species_counter
     all_results = []
-    pdf_files = [os.path.join(PDF_DIR, f) for f in os.listdir(PDF_DIR) if f.lower().endswith('.pdf')]
-    for pdf in tqdm(pdf_files, desc="Processing PDFs"):
+    for pdf in pdf_files:
         try:
-            res = process_pdf(pdf, hmdb_db, insect_db)
+            res = process_pdf(pdf, hmdb_db, insect_db, genus_to_species_counter)
             if res:
                 all_results.extend(res)
         except Exception as e:
             logging.exception(f"Error processing {pdf}: {e}")
     if all_results:
-        df = pd.DataFrame(all_results)
+        # Merge duplicates by InChIKey (or Metabolite name if InChIKey missing)
+        merged = {}
+        for row in all_results:
+            key = row.get('INCHIKEY') or row.get('Metabolite name')
+            if key not in merged:
+                merged[key] = row.copy()
+            else:
+                # Merge unique values for each field
+                for k, v in row.items():
+                    if k in ['stress sources', 'insect species', 'DOI references']:
+                        old = set(merged[key][k].split(', ')) if merged[key][k] else set()
+                        new = set(v.split(', ')) if v else set()
+                        # For stress sources, remove empty, normalize and deduplicate
+                        merged[key][k] = ', '.join(sorted(s.strip() for s in (old | new) if s.strip()))
+        df = pd.DataFrame(merged.values())
         df.to_excel(OUTPUT_XLSX, index=False)
         print(f"Results saved to {OUTPUT_XLSX}")
     else:
@@ -165,4 +558,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
