@@ -43,6 +43,7 @@ _whitespace_re = re.compile(r'\s+')
 _non_alpha_space_re = re.compile(r'[^a-z ]')
 _parentheses_re = re.compile(r'\s*\(.*?\)\s*')
 _synonym_split_re = re.compile(r'[;|]')
+_metabolite_token_re = re.compile(r'\b[\w][\w\-′″‴⁗\'\"]*[\w]\b|\b\w\b')
 
 # Translation table for Greek letters and primes
 _greek_translation = str.maketrans({
@@ -76,10 +77,8 @@ def extract_metabolite_tokens(text):
     """Extract tokens for metabolite matching, including digits, hyphens, and primes."""
     # Remove hyphens at line breaks
     text = _hyphen_break_re.sub('', text)
-    # Match words that can include digits, hyphens, and primes (but not starting/ending with special chars)
-    # Pattern: word characters, optionally followed by (hyphen/prime + more word chars)
-    token_pattern = re.compile(r'\b[\w][\w\-′″‴⁗\'\"]*[\w]\b|\b\w\b')
-    tokens = token_pattern.findall(text)
+    # Use pre-compiled pattern for token extraction
+    tokens = _metabolite_token_re.findall(text)
     return [t for t in tokens if len(t) >= 2]
 
 def generate_ngrams(tokens, max_n=6):
