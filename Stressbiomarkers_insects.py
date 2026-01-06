@@ -98,7 +98,6 @@ def generate_ngrams(tokens, max_n=8):
     """Generate n-grams from tokens (1-gram to max_n-gram).
     
     Filters applied for optimization:
-    - Skip n-grams whose normalized string length exceeds 64 characters
     - Skip n-grams that start with leading stop tokens
     """
     # Define leading stop tokens to skip
@@ -115,12 +114,6 @@ def generate_ngrams(tokens, max_n=8):
         
         for n in range(1, min(max_n + 1, len(tokens) - i + 1)):
             ngram = ' '.join(tokens[i:i+n])
-            
-            # Skip n-grams whose normalized length exceeds 64 characters
-            normalized_ngram = normalize(ngram)
-            if len(normalized_ngram) > 64:
-                continue
-            
             ngrams.append(ngram)
     return ngrams
 
@@ -513,29 +506,38 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
         print(f"[DEBUG] Exact matched count: {len(matched)}")
     
     # Fuzzy fallback: minimal pruned path for speed with controlled recall
-    # Only consider non-matched n-grams with normalized length between 5 and 40 characters
+    # Only consider non-matched n-grams with normalized length between 4 and 72 characters
     non_matched_ngrams = [ng for ng in norm_ngrams if ng not in matched_norm_ngrams]
     fuzzy_matched = []
     fuzzy_match_count = 0
     
     if non_matched_ngrams:
-        # Filter by length constraints: 5 to 40 characters
-        fuzzy_candidates = [ng for ng in non_matched_ngrams if 5 <= len(ng) <= 40]
+        # Filter by length constraints: 4 to 72 characters
+        fuzzy_candidates = [ng for ng in non_matched_ngrams if 4 <= len(ng) <= 72]
         
-        # Restrict to K=5000 shortest unique non-matching n-grams
-        K = 5000
+        # Restrict to K=12000 shortest unique non-matching n-grams
+        K = 12000
         fuzzy_candidates = sorted(set(fuzzy_candidates), key=len)[:K]
         
         # Pre-build HMDB key index by first character for faster filtering
         hmdb_by_first_char = {}
+        # Also build index by first two characters for fallback
+        hmdb_by_first_two_chars = {}
         for hmdb_key in hmdb_db.keys():
             if hmdb_key:
                 first_char = hmdb_key[0]
                 if first_char not in hmdb_by_first_char:
                     hmdb_by_first_char[first_char] = []
                 hmdb_by_first_char[first_char].append(hmdb_key)
+                
+                # Also index by first two characters
+                if len(hmdb_key) >= 2:
+                    first_two = hmdb_key[:2]
+                    if first_two not in hmdb_by_first_two_chars:
+                        hmdb_by_first_two_chars[first_two] = []
+                    hmdb_by_first_two_chars[first_two].append(hmdb_key)
         
-        M = 200  # Maximum fuzzy hits per PDF
+        M = 400  # Maximum fuzzy hits per PDF
         for candidate in fuzzy_candidates:
             if fuzzy_match_count >= M:
                 break
@@ -544,20 +546,25 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
             best_score = 0
             candidate_len = len(candidate)
             
-            # Filter HMDB keys by first character match and within 30% length difference
+            # Filter HMDB keys by first character match and within 40% length difference
             first_char = candidate[0] if candidate else ''
             hmdb_subset = hmdb_by_first_char.get(first_char, [])
             
+            # Fallback to first two characters if no hits on first-char pass
+            if not hmdb_subset and len(candidate) >= 2:
+                first_two = candidate[:2]
+                hmdb_subset = hmdb_by_first_two_chars.get(first_two, [])
+            
             for hmdb_key in hmdb_subset:
                 hmdb_len = len(hmdb_key)
-                # Skip if length difference > 30%
+                # Skip if length difference > 40%
                 len_diff_ratio = abs(candidate_len - hmdb_len) / max(candidate_len, hmdb_len)
-                if len_diff_ratio > 0.30:
+                if len_diff_ratio > 0.40:
                     continue
                 
-                # Use token_set_ratio with threshold >= 92
-                score = fuzz.token_set_ratio(candidate, hmdb_key)
-                if score >= 92 and score > best_score:
+                # Use token_ratio with threshold >= 88
+                score = fuzz.token_ratio(candidate, hmdb_key)
+                if score >= 88 and score > best_score:
                     best_score = score
                     best_match = hmdb_key
             
