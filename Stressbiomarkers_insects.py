@@ -512,22 +512,52 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
     if pdf_name in debug_pdfs:
         print(f"[DEBUG] Exact matched count: {len(matched)}")
     
-    # Fuzzy fallback: for non-matched n-grams, use RapidFuzz token_set_ratio >= 90
+    # Fuzzy fallback: minimal pruned path for speed with controlled recall
+    # Only consider non-matched n-grams with normalized length between 5 and 40 characters
     non_matched_ngrams = [ng for ng in norm_ngrams if ng not in matched_norm_ngrams]
     fuzzy_matched = []
     fuzzy_match_count = 0
     
     if non_matched_ngrams:
-        # Limit fuzzy search to control false positives - only check longer n-grams
-        fuzzy_candidates = [ng for ng in non_matched_ngrams if len(ng.split()) >= 2]
+        # Filter by length constraints: 5 to 40 characters
+        fuzzy_candidates = [ng for ng in non_matched_ngrams if 5 <= len(ng) <= 40]
         
+        # Restrict to K=5000 shortest unique non-matching n-grams
+        K = 5000
+        fuzzy_candidates = sorted(set(fuzzy_candidates), key=len)[:K]
+        
+        # Pre-build HMDB key index by first character for faster filtering
+        hmdb_by_first_char = {}
+        for hmdb_key in hmdb_db.keys():
+            if hmdb_key:
+                first_char = hmdb_key[0]
+                if first_char not in hmdb_by_first_char:
+                    hmdb_by_first_char[first_char] = []
+                hmdb_by_first_char[first_char].append(hmdb_key)
+        
+        M = 200  # Maximum fuzzy hits per PDF
         for candidate in fuzzy_candidates:
+            if fuzzy_match_count >= M:
+                break
+            
             best_match = None
             best_score = 0
-            # Check against all HMDB keys
-            for hmdb_key in hmdb_db.keys():
+            candidate_len = len(candidate)
+            
+            # Filter HMDB keys by first character match and within 30% length difference
+            first_char = candidate[0] if candidate else ''
+            hmdb_subset = hmdb_by_first_char.get(first_char, [])
+            
+            for hmdb_key in hmdb_subset:
+                hmdb_len = len(hmdb_key)
+                # Skip if length difference > 30%
+                len_diff_ratio = abs(candidate_len - hmdb_len) / max(candidate_len, hmdb_len)
+                if len_diff_ratio > 0.30:
+                    continue
+                
+                # Use token_set_ratio with threshold >= 92
                 score = fuzz.token_set_ratio(candidate, hmdb_key)
-                if score >= 90 and score > best_score:
+                if score >= 92 and score > best_score:
                     best_score = score
                     best_match = hmdb_key
             
