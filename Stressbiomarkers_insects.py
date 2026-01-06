@@ -42,30 +42,27 @@ _abbrev_species_re = re.compile(r'\b([A-Z])\.\s*([a-z]{3,})\b')
 _whitespace_re = re.compile(r'\s+')
 _non_alpha_space_re = re.compile(r'[^a-z ]')
 _parentheses_re = re.compile(r'\s*\(.*?\)\s*')
+_synonym_split_re = re.compile(r'[;|]')
+
+# Translation table for Greek letters and primes
+_greek_translation = str.maketrans({
+    'α': 'alpha', 'β': 'beta', 'γ': 'gamma', 'δ': 'delta', 'ε': 'epsilon',
+    'ζ': 'zeta', 'η': 'eta', 'θ': 'theta', 'ι': 'iota', 'κ': 'kappa',
+    'λ': 'lambda', 'μ': 'mu', 'ν': 'nu', 'ξ': 'xi', 'ο': 'omicron',
+    'π': 'pi', 'ρ': 'rho', 'σ': 'sigma', 'ς': 'sigma', 'τ': 'tau',
+    'υ': 'upsilon', 'φ': 'phi', 'χ': 'chi', 'ψ': 'psi', 'ω': 'omega',
+    'Α': 'alpha', 'Β': 'beta', 'Γ': 'gamma', 'Δ': 'delta', 'Ε': 'epsilon',
+    'Ζ': 'zeta', 'Η': 'eta', 'Θ': 'theta', 'Ι': 'iota', 'Κ': 'kappa',
+    'Λ': 'lambda', 'Μ': 'mu', 'Ν': 'nu', 'Ξ': 'xi', 'Ο': 'omicron',
+    'Π': 'pi', 'Ρ': 'rho', 'Σ': 'sigma', 'Τ': 'tau', 'Υ': 'upsilon',
+    'Φ': 'phi', 'Χ': 'chi', 'Ψ': 'psi', 'Ω': 'omega',
+    '′': '', '″': '', '‴': '', '⁗': '', "'": '', '"': ''
+})
 
 @lru_cache(maxsize=4096)
 def normalize(text):
-    # Normalize Greek letters and primes to ASCII equivalents
-    greek_map = {
-        'α': 'alpha', 'β': 'beta', 'γ': 'gamma', 'δ': 'delta', 'ε': 'epsilon',
-        'ζ': 'zeta', 'η': 'eta', 'θ': 'theta', 'ι': 'iota', 'κ': 'kappa',
-        'λ': 'lambda', 'μ': 'mu', 'ν': 'nu', 'ξ': 'xi', 'ο': 'omicron',
-        'π': 'pi', 'ρ': 'rho', 'σ': 'sigma', 'ς': 'sigma', 'τ': 'tau',
-        'υ': 'upsilon', 'φ': 'phi', 'χ': 'chi', 'ψ': 'psi', 'ω': 'omega',
-        'Α': 'alpha', 'Β': 'beta', 'Γ': 'gamma', 'Δ': 'delta', 'Ε': 'epsilon',
-        'Ζ': 'zeta', 'Η': 'eta', 'Θ': 'theta', 'Ι': 'iota', 'Κ': 'kappa',
-        'Λ': 'lambda', 'Μ': 'mu', 'Ν': 'nu', 'Ξ': 'xi', 'Ο': 'omicron',
-        'Π': 'pi', 'Ρ': 'rho', 'Σ': 'sigma', 'Τ': 'tau', 'Υ': 'upsilon',
-        'Φ': 'phi', 'Χ': 'chi', 'Ψ': 'psi', 'Ω': 'omega'
-    }
-    prime_map = {'′': '', '″': '', '‴': '', '⁗': '', "'": '', '"': ''}
-    
-    text = text.lower()
-    for greek, ascii_equiv in greek_map.items():
-        text = text.replace(greek, ascii_equiv)
-    for prime_char in prime_map:
-        text = text.replace(prime_char, prime_map[prime_char])
-    
+    # Normalize Greek letters and primes to ASCII equivalents using translation table
+    text = text.lower().translate(_greek_translation)
     # Remove hyphens, delimiters, spaces, dashes, etc.
     return _normalize_re.sub('', text)
 
@@ -117,7 +114,7 @@ def load_hmdb(path):
             for field in synonym_fields:
                 if field in row and row[field]:
                     # Handle multiple synonyms separated by semicolon or pipe
-                    synonyms = re.split(r'[;|]', row[field])
+                    synonyms = _synonym_split_re.split(row[field])
                     for syn in synonyms:
                         syn = syn.strip()
                         if syn:
