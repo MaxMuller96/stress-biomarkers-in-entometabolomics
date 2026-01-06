@@ -47,7 +47,7 @@ _whitespace_re = re.compile(r'\s+')
 _non_alpha_space_re = re.compile(r'[^a-z ]')
 _parentheses_re = re.compile(r'\s*\(.*?\)\s*')
 _synonym_separator_re = re.compile(r'[|;,\t]')
-_metabolite_token_re = re.compile(r'\b[\w][\w\-′″‴⁗\'\"]*[\w]\b|\b\w\b')
+_metabolite_token_re = re.compile(r'\b[\w][\w\-′″‴⁗\'\"/:\(\),\.]*[\w]\b|\b\w\b')
 
 # Translation table for Greek letters and primes
 _greek_translation = str.maketrans({
@@ -108,21 +108,11 @@ def load_hmdb(path):
     synonym_fields = ['SYNONYMS', 'SYNONYM', 'TRADITIONAL_NAME', 'IUPAC_NAME', 'COMMON_NAME']
     row_count = 0
     
-    # Auto-detect delimiter with csv.Sniffer, fallback to tab
+    # Force comma delimiter per provided header
+    delimiter = ','
+    logging.info(f"HMDB: Using forced delimiter: {repr(delimiter)}")
+    
     with open(path, encoding='utf-8') as f:
-        sample = f.read(HMDB_DELIMITER_SAMPLE_SIZE)
-        f.seek(0)
-        try:
-            # Ensure sample has enough data for delimiter detection
-            if len(sample.strip()) < HMDB_MIN_SAMPLE_SIZE:
-                raise ValueError("Sample too small for delimiter detection")
-            sniffer = csv.Sniffer()
-            delimiter = sniffer.sniff(sample).delimiter
-            logging.info(f"HMDB: Auto-detected delimiter: {repr(delimiter)}")
-        except (csv.Error, ValueError):
-            delimiter = '\t'  # Common HMDB TSV fallback
-            logging.info(f"HMDB: Using fallback delimiter: {repr(delimiter)}")
-        
         reader = csv.DictReader(f, delimiter=delimiter)
         for row in reader:
             row_count += 1
@@ -455,6 +445,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
         sections.get('results', ''),
         sections.get('materialsandmethods', ''),
         sections.get('keywords', ''),
+        sections.get('introduction', ''),
         sections.get('discussion', ''),
         sections.get('conclusion', ''),
         sections.get('references', '')
@@ -472,17 +463,23 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
     relevant_insect_text = ' '.join(insect_sections)
     # Extract tokens and generate n-grams for metabolite search
     tokens = extract_metabolite_tokens(relevant_metabolite_text)
-    ngrams = generate_ngrams(tokens, max_n=8)
+    ngrams = generate_ngrams(tokens, max_n=10)
     # Normalize n-grams and match against HMDB
     norm_ngrams = set(normalize(ng) for ng in ngrams)
+    # Log per-PDF diagnostics
+    logging.info(f"PDF {pdf_name}: Tokens={len(tokens)}, N-grams={len(ngrams)}, Unique normalized n-grams={len(norm_ngrams)}")
     if pdf_name in debug_pdfs:
         print(f"[DEBUG] Total tokens: {len(tokens)} | Total n-grams: {len(ngrams)} | Unique normalized n-grams: {len(norm_ngrams)}")
         print(f"[DEBUG] Sample tokens: {tokens[:30]}")
         print(f"[DEBUG] Sample n-grams: {ngrams[:30]}")
     matched = [hmdb_db[ng] for ng in norm_ngrams if ng in hmdb_db]
+    # Log match count
+    logging.info(f"PDF {pdf_name}: Matched metabolites (before single-element filter)={len(matched)}")
     if pdf_name in debug_pdfs:
         print(f"[DEBUG] Initial matched count (before single-element filter): {len(matched)}")
     matched = [m for m in matched if not is_single_element(m['CHEMICAL_FORMULA'])]
+    # Log final match count
+    logging.info(f"PDF {pdf_name}: Final matched metabolites={len(matched)}")
     if not matched:
         logging.info(f"No metabolites found in {os.path.basename(pdf_path)}; skipping.")
         return None
