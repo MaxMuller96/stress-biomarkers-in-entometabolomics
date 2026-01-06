@@ -14,6 +14,9 @@ import requests
 
 csv.field_size_limit(sys.maxsize)
 
+# Constants
+HMDB_DELIMITER_SAMPLE_SIZE = 8192  # Bytes to read for delimiter detection
+
 # Paths (update as needed)
 PDF_DIR = r".../pdfs"
 HMDB_PATH = r".../hmdb_metabolites/metabolites-2025-06-20.txt"
@@ -42,6 +45,7 @@ _abbrev_species_re = re.compile(r'\b([A-Z])\.\s*([a-z]{3,})\b')
 _whitespace_re = re.compile(r'\s+')
 _non_alpha_space_re = re.compile(r'[^a-z ]')
 _parentheses_re = re.compile(r'\s*\(.*?\)\s*')
+_synonym_separator_re = re.compile(r'[|;,\t]')
 _metabolite_token_re = re.compile(r'\b[\w][\w\-′″‴⁗\'\"]*[\w]\b|\b\w\b')
 
 # Translation table for Greek letters and primes
@@ -105,7 +109,7 @@ def load_hmdb(path):
     
     # Auto-detect delimiter with csv.Sniffer, fallback to tab
     with open(path, encoding='utf-8') as f:
-        sample = f.read(8192)
+        sample = f.read(HMDB_DELIMITER_SAMPLE_SIZE)
         f.seek(0)
         try:
             sniffer = csv.Sniffer()
@@ -126,7 +130,7 @@ def load_hmdb(path):
             for field in synonym_fields:
                 if field in row and row[field]:
                     # Split by multiple delimiters: | ; , \t
-                    synonyms = re.split(r'[|;,\t]', row[field])
+                    synonyms = _synonym_separator_re.split(row[field])
                     for syn in synonyms:
                         syn = syn.strip()
                         if syn:
@@ -441,14 +445,10 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     title_block = ' '.join(lines[:10])
     # Build relevant text for metabolite extraction.
-    # Prefer 'results'; if it's missing (often merged as 'results and discussion'), fall back to 'discussion'.
-    results_text = sections.get('results', '')
-    if not results_text.strip():
-        results_text = sections.get('discussion', '')
     metabolite_sections = [
         title_block,
         sections.get('abstract', ''),
-        results_text,
+        sections.get('results', ''),
         sections.get('materialsandmethods', ''),
         sections.get('keywords', ''),
         sections.get('discussion', ''),
