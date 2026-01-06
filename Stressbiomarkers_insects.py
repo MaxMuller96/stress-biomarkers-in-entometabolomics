@@ -102,24 +102,41 @@ def is_single_element(formula):
 def load_hmdb(path):
     db = {}
     synonym_fields = ['SYNONYMS', 'SYNONYM', 'TRADITIONAL_NAME', 'IUPAC_NAME', 'COMMON_NAME']
+    row_count = 0
+    
+    # Auto-detect delimiter with csv.Sniffer, fallback to tab
     with open(path, encoding='utf-8') as f:
-        reader = csv.DictReader(f, delimiter=',')
+        sample = f.read(8192)
+        f.seek(0)
+        try:
+            sniffer = csv.Sniffer()
+            delimiter = sniffer.sniff(sample).delimiter
+            logging.info(f"HMDB: Auto-detected delimiter: {repr(delimiter)}")
+        except Exception:
+            delimiter = '\t'  # Common HMDB TSV fallback
+            logging.info(f"HMDB: Using fallback delimiter: {repr(delimiter)}")
+        
+        reader = csv.DictReader(f, delimiter=delimiter)
         for row in reader:
+            row_count += 1
             # Add primary NAME
             name_norm = normalize(row['NAME'])
             db[name_norm] = row
             
-            # Add synonyms and alternative names
+            # Add synonyms and alternative names with multiple separators: | ; , \t
             for field in synonym_fields:
                 if field in row and row[field]:
-                    # Handle multiple synonyms separated by semicolon or pipe
-                    synonyms = _synonym_split_re.split(row[field])
+                    # Split by multiple delimiters: | ; , \t
+                    synonyms = re.split(r'[|;,\t]', row[field])
                     for syn in synonyms:
                         syn = syn.strip()
                         if syn:
                             syn_norm = normalize(syn)
                             if syn_norm and syn_norm not in db:
                                 db[syn_norm] = row
+    
+    unique_name_count = len(db)
+    logging.info(f"HMDB: Loaded {row_count} rows, {unique_name_count} unique normalized names")
     return db
 
 def normalize_text(text):
@@ -434,7 +451,10 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
         sections.get('abstract', ''),
         results_text,
         sections.get('materialsandmethods', ''),
-        sections.get('keywords', '')
+        sections.get('keywords', ''),
+        sections.get('discussion', ''),
+        sections.get('conclusion', ''),
+        sections.get('references', '')
     ]
     relevant_metabolite_text = ' '.join(metabolite_sections)
     # Build relevant text for insect species extraction (exclude discussion, conclusion)
@@ -449,7 +469,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
     relevant_insect_text = ' '.join(insect_sections)
     # Extract tokens and generate n-grams for metabolite search
     tokens = extract_metabolite_tokens(relevant_metabolite_text)
-    ngrams = generate_ngrams(tokens, max_n=6)
+    ngrams = generate_ngrams(tokens, max_n=8)
     # Normalize n-grams and match against HMDB
     norm_ngrams = set(normalize(ng) for ng in ngrams)
     if pdf_name in debug_pdfs:
