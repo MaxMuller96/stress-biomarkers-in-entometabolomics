@@ -112,6 +112,9 @@ def load_hmdb(path):
         sample = f.read(HMDB_DELIMITER_SAMPLE_SIZE)
         f.seek(0)
         try:
+            # Ensure sample has enough data for delimiter detection
+            if len(sample.strip()) < 100:
+                raise ValueError("Sample too small for delimiter detection")
             sniffer = csv.Sniffer()
             delimiter = sniffer.sniff(sample).delimiter
             logging.info(f"HMDB: Auto-detected delimiter: {repr(delimiter)}")
