@@ -11,6 +11,7 @@ from functools import lru_cache
 import pandas as pd
 from pdfminer.high_level import extract_text
 import requests
+from rapidfuzz import fuzz
 
 csv.field_size_limit(sys.maxsize)
 
@@ -36,7 +37,9 @@ debug_pdfs = set()
 logging.basicConfig(filename=LOG_PATH, level=logging.INFO, format='%(asctime)s %(message)s')
 
 # Pre-compiled regex patterns for better performance
-_normalize_re = re.compile(r'[-–—,;:\s]')
+# Updated to preserve lipid notation characters: keep : / ( ) . , and hyphens inside tokens
+# Only remove em-dashes, en-dashes, semicolons, and collapse whitespace
+_normalize_re = re.compile(r'[–—;]|\s+')
 _word_re = re.compile(r'\b\w+\b')
 _hyphen_break_re = re.compile(r'-\s*\n\s*')
 _doi_re = re.compile(r"10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.IGNORECASE)
@@ -71,8 +74,11 @@ _greek_translation = str.maketrans({
 def normalize(text):
     # Normalize Greek letters and primes to ASCII equivalents using translation table
     text = text.lower().translate(_greek_translation)
-    # Remove hyphens, delimiters, spaces, dashes, etc.
-    return _normalize_re.sub('', text)
+    # Replace em-dashes, en-dashes, semicolons with space, then collapse whitespace
+    # This preserves lipid notation characters: : / ( ) . , and hyphens within tokens
+    text = _normalize_re.sub(' ', text)
+    # Remove leading/trailing whitespace and collapse internal whitespace
+    return ' '.join(text.split())
 
 def extract_words(text):
     # Remove hyphens at line breaks, normalize, and extract words
@@ -475,14 +481,61 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
         print(f"[DEBUG] Total tokens: {len(tokens)} | Total n-grams: {len(ngrams)} | Unique normalized n-grams: {len(norm_ngrams)}")
         print(f"[DEBUG] Sample tokens: {tokens[:30]}")
         print(f"[DEBUG] Sample n-grams: {ngrams[:30]}")
+    
+    # Exact matching
     matched = [hmdb_db[ng] for ng in norm_ngrams if ng in hmdb_db]
-    # Log match count
-    logging.info(f"PDF {pdf_name}: Matched metabolites (before single-element filter)={len(matched)}")
+    matched_norm_ngrams = set(ng for ng in norm_ngrams if ng in hmdb_db)
+    
+    # Log exact match count
+    logging.info(f"PDF {pdf_name}: Exact matched metabolites (before fuzzy)={len(matched)}")
     if pdf_name in debug_pdfs:
-        print(f"[DEBUG] Initial matched count (before single-element filter): {len(matched)}")
+        print(f"[DEBUG] Exact matched count: {len(matched)}")
+    
+    # Fuzzy fallback: for non-matched n-grams, use RapidFuzz token_set_ratio >= 90
+    non_matched_ngrams = [ng for ng in norm_ngrams if ng not in matched_norm_ngrams]
+    fuzzy_matched = []
+    fuzzy_match_count = 0
+    
+    if non_matched_ngrams:
+        # Limit fuzzy search to control false positives - only check longer n-grams
+        fuzzy_candidates = [ng for ng in non_matched_ngrams if len(ng.split()) >= 2]
+        
+        for candidate in fuzzy_candidates:
+            best_match = None
+            best_score = 0
+            # Check against all HMDB keys
+            for hmdb_key in hmdb_db.keys():
+                score = fuzz.token_set_ratio(candidate, hmdb_key)
+                if score >= 90 and score > best_score:
+                    best_score = score
+                    best_match = hmdb_key
+            
+            if best_match:
+                fuzzy_matched.append(hmdb_db[best_match])
+                fuzzy_match_count += 1
+    
+    # Combine exact and fuzzy matches
+    matched.extend(fuzzy_matched)
+    
+    # Log fuzzy match count
+    if fuzzy_match_count > 0:
+        logging.info(f"PDF {pdf_name}: Fuzzy matched metabolites={fuzzy_match_count}")
+    
+    # Log match count
+    logging.info(f"PDF {pdf_name}: Total matched metabolites (before single-element filter)={len(matched)}")
+    if pdf_name in debug_pdfs:
+        print(f"[DEBUG] Total matched count (exact + fuzzy, before single-element filter): {len(matched)}")
+    
     matched = [m for m in matched if not is_single_element(m['CHEMICAL_FORMULA'])]
-    # Log final match count
-    logging.info(f"PDF {pdf_name}: Final matched metabolites={len(matched)}")
+    
+    # Log unique metabolites by INCHIKEY or NAME
+    unique_metabolites = set()
+    for m in matched:
+        unique_key = m.get('INCHIKEY') if m.get('INCHIKEY') else m.get('NAME', '')
+        if unique_key:
+            unique_metabolites.add(unique_key)
+    logging.info(f"PDF {pdf_name}: Unique matched metabolites (after filtering)={len(unique_metabolites)}")
+    
     if not matched:
         logging.info(f"No metabolites found in {os.path.basename(pdf_path)}; skipping.")
         return None
@@ -514,7 +567,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
             print(f"    '{s}' (normalized: '{norm}') in DB: {norm in insect_db}")
         print(f"[DEBUG] Sample normalized insect DB: {list(insect_db)[:50]}")
     if not normalized_insect_species:
-        logging.info(f"No insect species found in {os.path.basename(pdf_path)}; metabolites removed")
+        logging.info(f"PDF {pdf_name}: Skipped due to missing insect species (gate check failed)")
         print(f"[DEBUG] No insect species found, skipping.")
         return None
     # Stress sources: can be from all sections
