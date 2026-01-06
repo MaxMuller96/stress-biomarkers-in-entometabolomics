@@ -42,7 +42,6 @@ _abbrev_species_re = re.compile(r'\b([A-Z])\.\s*([a-z]{3,})\b')
 _whitespace_re = re.compile(r'\s+')
 _non_alpha_space_re = re.compile(r'[^a-z ]')
 _parentheses_re = re.compile(r'\s*\(.*?\)\s*')
-_synonym_split_re = re.compile(r'[;|]')
 _metabolite_token_re = re.compile(r'\b[\w][\w\-′″‴⁗\'\"]*[\w]\b|\b\w\b')
 
 # Translation table for Greek letters and primes
@@ -112,7 +111,7 @@ def load_hmdb(path):
             sniffer = csv.Sniffer()
             delimiter = sniffer.sniff(sample).delimiter
             logging.info(f"HMDB: Auto-detected delimiter: {repr(delimiter)}")
-        except Exception:
+        except (csv.Error, ValueError):
             delimiter = '\t'  # Common HMDB TSV fallback
             logging.info(f"HMDB: Using fallback delimiter: {repr(delimiter)}")
         
