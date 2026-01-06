@@ -3,3 +3,4 @@ tqdm
 pdfminer.six 
 requests
 openpyxl
+rapidfuzz
