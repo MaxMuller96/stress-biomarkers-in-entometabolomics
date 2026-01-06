@@ -17,6 +17,7 @@ csv.field_size_limit(sys.maxsize)
 # Constants
 HMDB_DELIMITER_SAMPLE_SIZE = 8192  # Bytes to read for delimiter detection
 HMDB_MIN_SAMPLE_SIZE = 100  # Minimum bytes required for reliable delimiter detection
+HMDB_DELIMITER = ','  # Force comma delimiter for HMDB metabolite files
 
 # Paths (update as needed)
 PDF_DIR = r".../pdfs"
@@ -47,6 +48,8 @@ _whitespace_re = re.compile(r'\s+')
 _non_alpha_space_re = re.compile(r'[^a-z ]')
 _parentheses_re = re.compile(r'\s*\(.*?\)\s*')
 _synonym_separator_re = re.compile(r'[|;,\t]')
+# Metabolite token regex: captures tokens with digits, hyphens, primes, and chemical punctuation (/:(),.)
+# to preserve complex metabolite names like "N-(2-hydroxyethyl)-palmitamide" or "3,4-dihydroxy-L-phenylalanine"
 _metabolite_token_re = re.compile(r'\b[\w][\w\-′″‴⁗\'\"/:\(\),\.]*[\w]\b|\b\w\b')
 
 # Translation table for Greek letters and primes
@@ -109,7 +112,7 @@ def load_hmdb(path):
     row_count = 0
     
     # Force comma delimiter per provided header
-    delimiter = ','
+    delimiter = HMDB_DELIMITER
     logging.info(f"HMDB: Using forced delimiter: {repr(delimiter)}")
     
     with open(path, encoding='utf-8') as f:
