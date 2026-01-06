@@ -94,7 +94,7 @@ def extract_metabolite_tokens(text):
     tokens = _metabolite_token_re.findall(text)
     return [t for t in tokens if len(t) >= 2]
 
-def generate_ngrams(tokens, max_n=8):
+def generate_ngrams(tokens, max_n=10):
     """Generate n-grams from tokens (1-gram to max_n-gram).
     
     Filters applied for optimization:
@@ -486,7 +486,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
     relevant_insect_text = ' '.join(insect_sections)
     # Extract tokens and generate n-grams for metabolite search
     tokens = extract_metabolite_tokens(relevant_metabolite_text)
-    ngrams = generate_ngrams(tokens, max_n=8)
+    ngrams = generate_ngrams(tokens, max_n=10)
     # Normalize n-grams and match against HMDB
     norm_ngrams = set(normalize(ng) for ng in ngrams)
     # Log per-PDF diagnostics
@@ -512,8 +512,8 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
     fuzzy_match_count = 0
     
     if non_matched_ngrams:
-        # Filter by length constraints: 4 to 72 characters
-        fuzzy_candidates = [ng for ng in non_matched_ngrams if 4 <= len(ng) <= 72]
+        # Filter by length constraints: 4 to 96 characters
+        fuzzy_candidates = [ng for ng in non_matched_ngrams if 4 <= len(ng) <= 96]
         
         # Restrict to K=12000 shortest unique non-matching n-grams
         K = 12000
