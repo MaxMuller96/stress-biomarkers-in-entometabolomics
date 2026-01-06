@@ -42,17 +42,53 @@ _abbrev_species_re = re.compile(r'\b([A-Z])\.\s*([a-z]{3,})\b')
 _whitespace_re = re.compile(r'\s+')
 _non_alpha_space_re = re.compile(r'[^a-z ]')
 _parentheses_re = re.compile(r'\s*\(.*?\)\s*')
+_synonym_split_re = re.compile(r'[;|]')
+_metabolite_token_re = re.compile(r'\b[\w][\w\-′″‴⁗\'\"]*[\w]\b|\b\w\b')
+
+# Translation table for Greek letters and primes
+_greek_translation = str.maketrans({
+    'α': 'alpha', 'β': 'beta', 'γ': 'gamma', 'δ': 'delta', 'ε': 'epsilon',
+    'ζ': 'zeta', 'η': 'eta', 'θ': 'theta', 'ι': 'iota', 'κ': 'kappa',
+    'λ': 'lambda', 'μ': 'mu', 'ν': 'nu', 'ξ': 'xi', 'ο': 'omicron',
+    'π': 'pi', 'ρ': 'rho', 'σ': 'sigma', 'ς': 'sigma', 'τ': 'tau',
+    'υ': 'upsilon', 'φ': 'phi', 'χ': 'chi', 'ψ': 'psi', 'ω': 'omega',
+    'Α': 'alpha', 'Β': 'beta', 'Γ': 'gamma', 'Δ': 'delta', 'Ε': 'epsilon',
+    'Ζ': 'zeta', 'Η': 'eta', 'Θ': 'theta', 'Ι': 'iota', 'Κ': 'kappa',
+    'Λ': 'lambda', 'Μ': 'mu', 'Ν': 'nu', 'Ξ': 'xi', 'Ο': 'omicron',
+    'Π': 'pi', 'Ρ': 'rho', 'Σ': 'sigma', 'Τ': 'tau', 'Υ': 'upsilon',
+    'Φ': 'phi', 'Χ': 'chi', 'Ψ': 'psi', 'Ω': 'omega',
+    '′': '', '″': '', '‴': '', '⁗': '', "'": '', '"': ''
+})
 
 @lru_cache(maxsize=4096)
 def normalize(text):
-    # Remove hyphens, delimiters, spaces, dashes, etc., and lowercase
-    return _normalize_re.sub('', text.lower())
+    # Normalize Greek letters and primes to ASCII equivalents using translation table
+    text = text.lower().translate(_greek_translation)
+    # Remove hyphens, delimiters, spaces, dashes, etc.
+    return _normalize_re.sub('', text)
 
 def extract_words(text):
     # Remove hyphens at line breaks, normalize, and extract words
     text = _hyphen_break_re.sub('', text)
     words = _word_re.findall(text)
     return [w for w in words if len(w) >= 3]
+
+def extract_metabolite_tokens(text):
+    """Extract tokens for metabolite matching, including digits, hyphens, and primes."""
+    # Remove hyphens at line breaks
+    text = _hyphen_break_re.sub('', text)
+    # Use pre-compiled pattern for token extraction
+    tokens = _metabolite_token_re.findall(text)
+    return [t for t in tokens if len(t) >= 2]
+
+def generate_ngrams(tokens, max_n=6):
+    """Generate n-grams from tokens (1-gram to max_n-gram)."""
+    ngrams = []
+    for i in range(len(tokens)):
+        for n in range(1, min(max_n + 1, len(tokens) - i + 1)):
+            ngram = ' '.join(tokens[i:i+n])
+            ngrams.append(ngram)
+    return ngrams
 
 def extract_doi(text):
     """Extracts all DOI strings from the given text."""
@@ -65,11 +101,25 @@ def is_single_element(formula):
 
 def load_hmdb(path):
     db = {}
+    synonym_fields = ['SYNONYMS', 'SYNONYM', 'TRADITIONAL_NAME', 'IUPAC_NAME', 'COMMON_NAME']
     with open(path, encoding='utf-8') as f:
         reader = csv.DictReader(f, delimiter=',')
         for row in reader:
+            # Add primary NAME
             name_norm = normalize(row['NAME'])
             db[name_norm] = row
+            
+            # Add synonyms and alternative names
+            for field in synonym_fields:
+                if field in row and row[field]:
+                    # Handle multiple synonyms separated by semicolon or pipe
+                    synonyms = _synonym_split_re.split(row[field])
+                    for syn in synonyms:
+                        syn = syn.strip()
+                        if syn:
+                            syn_norm = normalize(syn)
+                            if syn_norm and syn_norm not in db:
+                                db[syn_norm] = row
     return db
 
 def normalize_text(text):
@@ -397,14 +447,16 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
         sections.get('introduction', '')
     ]
     relevant_insect_text = ' '.join(insect_sections)
-    # Extract words for metabolite search only from allowed sections
-    words = extract_words(relevant_metabolite_text)
-    norm_words = set(normalize(w) for w in words)
+    # Extract tokens and generate n-grams for metabolite search
+    tokens = extract_metabolite_tokens(relevant_metabolite_text)
+    ngrams = generate_ngrams(tokens, max_n=6)
+    # Normalize n-grams and match against HMDB
+    norm_ngrams = set(normalize(ng) for ng in ngrams)
     if pdf_name in debug_pdfs:
-        print(f"[DEBUG] Total words: {len(words)} | Unique normalized words: {len(norm_words)}")
-        print(f"[DEBUG] Sample words: {[repr(w) for w in words[:50]]}")
-        print(f"[DEBUG] Sample normalized words: {[repr(w) for w in list(norm_words)[:50]]}")
-    matched = [hmdb_db[w] for w in norm_words if w in hmdb_db]
+        print(f"[DEBUG] Total tokens: {len(tokens)} | Total n-grams: {len(ngrams)} | Unique normalized n-grams: {len(norm_ngrams)}")
+        print(f"[DEBUG] Sample tokens: {tokens[:30]}")
+        print(f"[DEBUG] Sample n-grams: {ngrams[:30]}")
+    matched = [hmdb_db[ng] for ng in norm_ngrams if ng in hmdb_db]
     if pdf_name in debug_pdfs:
         print(f"[DEBUG] Initial matched count (before single-element filter): {len(matched)}")
     matched = [m for m in matched if not is_single_element(m['CHEMICAL_FORMULA'])]
