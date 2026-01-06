@@ -95,11 +95,32 @@ def extract_metabolite_tokens(text):
     return [t for t in tokens if len(t) >= 2]
 
 def generate_ngrams(tokens, max_n=8):
-    """Generate n-grams from tokens (1-gram to max_n-gram)."""
+    """Generate n-grams from tokens (1-gram to max_n-gram).
+    
+    Filters applied for optimization:
+    - Skip n-grams whose normalized string length exceeds 64 characters
+    - Skip n-grams that start with leading stop tokens
+    """
+    # Define leading stop tokens to skip
+    leading_stop_tokens = {"the", "and", "of", "in", "for", "with", "by", "on"}
+    
     ngrams = []
     for i in range(len(tokens)):
+        # Convert first token to lowercase once per outer loop (optimization)
+        first_token_lower = tokens[i].lower()
+        
+        # Skip n-grams that start with leading stop tokens (case-insensitive)
+        if first_token_lower in leading_stop_tokens:
+            continue
+        
         for n in range(1, min(max_n + 1, len(tokens) - i + 1)):
             ngram = ' '.join(tokens[i:i+n])
+            
+            # Skip n-grams whose normalized length exceeds 64 characters
+            normalized_ngram = normalize(ngram)
+            if len(normalized_ngram) > 64:
+                continue
+            
             ngrams.append(ngram)
     return ngrams
 
@@ -472,7 +493,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
     relevant_insect_text = ' '.join(insect_sections)
     # Extract tokens and generate n-grams for metabolite search
     tokens = extract_metabolite_tokens(relevant_metabolite_text)
-    ngrams = generate_ngrams(tokens, max_n=10)
+    ngrams = generate_ngrams(tokens, max_n=8)
     # Normalize n-grams and match against HMDB
     norm_ngrams = set(normalize(ng) for ng in ngrams)
     # Log per-PDF diagnostics
