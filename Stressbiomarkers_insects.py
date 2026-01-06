@@ -16,6 +16,7 @@ csv.field_size_limit(sys.maxsize)
 
 # Constants
 HMDB_DELIMITER_SAMPLE_SIZE = 8192  # Bytes to read for delimiter detection
+HMDB_MIN_SAMPLE_SIZE = 100  # Minimum bytes required for reliable delimiter detection
 
 # Paths (update as needed)
 PDF_DIR = r".../pdfs"
@@ -84,7 +85,7 @@ def extract_metabolite_tokens(text):
     tokens = _metabolite_token_re.findall(text)
     return [t for t in tokens if len(t) >= 2]
 
-def generate_ngrams(tokens, max_n=6):
+def generate_ngrams(tokens, max_n=8):
     """Generate n-grams from tokens (1-gram to max_n-gram)."""
     ngrams = []
     for i in range(len(tokens)):
@@ -113,7 +114,7 @@ def load_hmdb(path):
         f.seek(0)
         try:
             # Ensure sample has enough data for delimiter detection
-            if len(sample.strip()) < 100:
+            if len(sample.strip()) < HMDB_MIN_SAMPLE_SIZE:
                 raise ValueError("Sample too small for delimiter detection")
             sniffer = csv.Sniffer()
             delimiter = sniffer.sniff(sample).delimiter
@@ -129,10 +130,10 @@ def load_hmdb(path):
             name_norm = normalize(row['NAME'])
             db[name_norm] = row
             
-            # Add synonyms and alternative names with multiple separators: | ; , \t
+            # Add synonyms and alternative names with multiple separators: |;,\t
             for field in synonym_fields:
                 if field in row and row[field]:
-                    # Split by multiple delimiters: | ; , \t
+                    # Split by multiple delimiters using _synonym_separator_re pattern: [|;,\t]
                     synonyms = _synonym_separator_re.split(row[field])
                     for syn in synonyms:
                         syn = syn.strip()
