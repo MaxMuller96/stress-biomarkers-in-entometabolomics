@@ -106,13 +106,15 @@ def generate_ngrams(tokens, max_n=8):
     
     ngrams = []
     for i in range(len(tokens)):
+        # Convert first token to lowercase once per outer loop (optimization)
+        first_token_lower = tokens[i].lower()
+        
+        # Skip n-grams that start with leading stop tokens (case-insensitive)
+        if first_token_lower in leading_stop_tokens:
+            continue
+        
         for n in range(1, min(max_n + 1, len(tokens) - i + 1)):
             ngram = ' '.join(tokens[i:i+n])
-            
-            # Skip n-grams that start with leading stop tokens (case-insensitive)
-            first_token = tokens[i].lower()
-            if first_token in leading_stop_tokens:
-                continue
             
             # Skip n-grams whose normalized length exceeds 64 characters
             normalized_ngram = normalize(ngram)
