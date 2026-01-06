@@ -726,7 +726,7 @@ def main():
         # Merge duplicates by InChIKey (or Metabolite name if InChIKey missing)
         merged = {}
         for row in all_results:
-            key = row.get('INCHIKEY') or row.get('Metabolite name')
+            key = row.get('InChIKey') or row.get('Metabolite name')
             if key not in merged:
                 merged[key] = row.copy()
             else:
