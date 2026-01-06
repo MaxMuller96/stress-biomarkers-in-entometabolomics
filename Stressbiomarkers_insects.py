@@ -651,6 +651,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
         superclass = get_npclassifier_superclass(m['SMILES'], m['INCHIKEY'])
         results.append({
             'Metabolite name': m.get('NAME', ''),
+            'InChIKey': m.get('INCHIKEY', ''),
             'CHEMICAL_FORMULA': m.get('CHEMICAL_FORMULA', ''),
             'Average Mass': m.get('AVERAGE_MASS', ''),
             'Mono Mass': m.get('MONO_MASS', ''),
