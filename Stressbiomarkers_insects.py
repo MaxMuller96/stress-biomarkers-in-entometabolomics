@@ -35,9 +35,6 @@ OUTPUT_XLSX = "metabolite_results.xlsx"
 
 debug_pdfs = set()
 
-# Setup logging
-logging.basicConfig(filename=LOG_PATH, level=logging.INFO, format='%(asctime)s %(message)s')
-
 # Global logging queue for multiprocessing
 _log_queue = None
 _log_listener = None
@@ -45,7 +42,7 @@ _log_listener = None
 def setup_main_logging(log_path=LOG_PATH, level=logging.INFO):
     """Setup main process logging with queue listener for multiprocessing."""
     global _log_queue, _log_listener
-    _log_queue = Queue(-1)
+    _log_queue = Queue(1000)  # Bounded queue to prevent memory exhaustion
     
     # Create file handler for the main process
     handler = logging.FileHandler(log_path)
@@ -766,9 +763,9 @@ def main():
                         species_found.append(norm_abbrev)
             pdf_to_species[os.path.basename(pdf)] = set(species_found)
         # Second pass: process each PDF with full genus_to_species_counter
-        # Note: When using multiprocessing.Pool for parallel processing, workers should call:
-        #   setup_worker_logging(log_queue)
-        # to configure their logging to use the queue.
+        # Note: This currently processes PDFs sequentially. For parallel processing,
+        # use multiprocessing.Pool and pass log_queue to workers via an initializer
+        # that calls setup_worker_logging(log_queue) to enable multiprocessing-safe logging.
         all_results = []
         for pdf in pdf_files:
             try:
