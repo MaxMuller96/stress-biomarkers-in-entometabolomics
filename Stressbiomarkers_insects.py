@@ -461,6 +461,48 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
     # Use the first 10 non-empty lines as the title block
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     title_block = ' '.join(lines[:10])
+    
+    # Build relevant text for insect species extraction (exclude discussion, conclusion)
+    # Cache this to avoid rebuilding it later
+    insect_sections = [
+        title_block,
+        sections.get('abstract', ''),
+        sections.get('results', ''),
+        sections.get('materialsandmethods', ''),
+        sections.get('keywords', ''),
+        sections.get('introduction', '')
+    ]
+    relevant_insect_text = ' '.join(insect_sections)
+    
+    # EARLY GATING: Extract and normalize insect species before expensive metabolite work
+    insect_species = extract_insect_species(relevant_insect_text, insect_db, debug_pdf=pdf_name if pdf_name in debug_pdfs else None)
+    # Normalize and apply genus-to-species backfill
+    normalized_insect_species = []
+    norm_species = [normalize_insect_name(s) for s in insect_species]
+    # If all are single-word (genus only), use genus_to_species_counter
+    if all(' ' not in s for s in norm_species):
+        for genus in norm_species:
+            if genus in genus_to_species_counter and genus_to_species_counter[genus]:
+                most_common = genus_to_species_counter[genus].most_common(1)
+                normalized_insect_species.extend([f"{genus} {species}" for species, _ in most_common])
+    else:
+        normalized_insect_species = sorted(set(norm_species))
+    
+    # Debug logging for insect detection
+    if pdf_name in debug_pdfs:
+        print(f"[DEBUG] Insect species found: {insect_species}")
+        print("[DEBUG] Normalized insect species candidates and DB presence:")
+        for s in insect_species:
+            norm = normalize_insect_name(s)
+            print(f"    '{s}' (normalized: '{norm}') in DB: {norm in insect_db}")
+        print(f"[DEBUG] Sample normalized insect DB: {list(insect_db)[:50]}")
+    
+    # Exit early if no normalized insect species found
+    if not normalized_insect_species:
+        logging.info(f"PDF {pdf_name}: Skipped due to missing insect species (gate check failed)")
+        print(f"[DEBUG] No insect species found, skipping.")
+        return None
+    
     # Build relevant text for metabolite extraction.
     metabolite_sections = [
         title_block,
@@ -474,16 +516,6 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
         sections.get('references', '')
     ]
     relevant_metabolite_text = ' '.join(metabolite_sections)
-    # Build relevant text for insect species extraction (exclude discussion, conclusion)
-    insect_sections = [
-        title_block,
-        sections.get('abstract', ''),
-        sections.get('results', ''),
-        sections.get('materialsandmethods', ''),
-        sections.get('keywords', ''),
-        sections.get('introduction', '')
-    ]
-    relevant_insect_text = ' '.join(insect_sections)
     # Extract tokens and generate n-grams for metabolite search
     tokens = extract_metabolite_tokens(relevant_metabolite_text)
     ngrams = generate_ngrams(tokens, max_n=10)
@@ -597,37 +629,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
     if not matched:
         logging.info(f"No metabolites found in {os.path.basename(pdf_path)}; skipping.")
         return None
-    # Insect species from allowed sections
-    insect_species = extract_insect_species(relevant_insect_text, insect_db, debug_pdf=pdf_name if pdf_name in debug_pdfs else None)
-    # If only genus names are found, use the most common species for that genus from the cache
-    normalized_insect_species = []
-    norm_species = [normalize_insect_name(s) for s in insect_species]
-    # If all are single-word (genus only), use genus_to_species_counter
-    if all(' ' not in s for s in norm_species):
-        for genus in norm_species:
-            if genus in genus_to_species_counter and genus_to_species_counter[genus]:
-                most_common = genus_to_species_counter[genus].most_common(1)
-                normalized_insect_species.extend([f"{genus} {species}" for species, _ in most_common])
-    else:
-        normalized_insect_species = sorted(set(norm_species))
-    if pdf_name in debug_pdfs:
-        print(f"[DEBUG] Insect species found: {insect_species}")
-        print("[DEBUG] Normalized insect species candidates and DB presence:")
-        for s in insect_species:
-            norm = normalize_insect_name(s)
-            print(f"    '{s}' (normalized: '{norm}') in DB: {norm in insect_db}")
-        print(f"[DEBUG] Sample normalized insect DB: {list(insect_db)[:50]}")
-    if pdf_name in debug_pdfs:
-        print(f"[DEBUG] Insect species found: {insect_species}")
-        print("[DEBUG] Normalized insect species candidates and DB presence:")
-        for s in insect_species:
-            norm = normalize_insect_name(s)
-            print(f"    '{s}' (normalized: '{norm}') in DB: {norm in insect_db}")
-        print(f"[DEBUG] Sample normalized insect DB: {list(insect_db)[:50]}")
-    if not normalized_insect_species:
-        logging.info(f"PDF {pdf_name}: Skipped due to missing insect species (gate check failed)")
-        print(f"[DEBUG] No insect species found, skipping.")
-        return None
+    
     # Stress sources: can be from all sections
     relevant_stress_text = ' '.join([
         title_block,
