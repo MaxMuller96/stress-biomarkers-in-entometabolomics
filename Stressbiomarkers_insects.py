@@ -462,17 +462,9 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     title_block = ' '.join(lines[:10])
     
-    # Build relevant text for insect species extraction (exclude discussion, conclusion)
+    # Build relevant text for insect species extraction from abstract only
     # Cache this to avoid rebuilding it later
-    insect_sections = [
-        title_block,
-        sections.get('abstract', ''),
-        sections.get('results', ''),
-        sections.get('materialsandmethods', ''),
-        sections.get('keywords', ''),
-        sections.get('introduction', '')
-    ]
-    relevant_insect_text = ' '.join(insect_sections)
+    relevant_insect_text = sections.get('abstract', '')
     
     # EARLY GATING: Extract and normalize insect species before expensive metabolite work
     insect_species = extract_insect_species(relevant_insect_text, insect_db, debug_pdf=pdf_name if pdf_name in debug_pdfs else None)
@@ -682,15 +674,7 @@ def main():
         sections = extract_sections(text)
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         title_block = ' '.join(lines[:10])
-        insect_sections = [
-            title_block,
-            sections.get('abstract', ''),
-            sections.get('results', ''),
-            sections.get('materialsandmethods', ''),
-            sections.get('keywords', ''),
-            sections.get('introduction', '')
-        ]
-        relevant_insect_text = ' '.join(insect_sections)
+        relevant_insect_text = sections.get('abstract', '')
         # Extract all genus-species found in this PDF
         species_found = []
         for match in re.findall(r'\b[A-Z][a-z]{2,}\s*[ \n\r\t]+\s*[a-z]{3,}\b', relevant_insect_text):
