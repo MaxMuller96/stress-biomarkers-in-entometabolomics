@@ -492,7 +492,8 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
     # Exit early if no normalized insect species found
     if not normalized_insect_species:
         logging.info(f"PDF {pdf_name}: Skipped due to missing insect species (gate check failed)")
-        print(f"[DEBUG] No insect species found, skipping.")
+        if pdf_name in debug_pdfs:
+            print(f"[DEBUG] No insect species found, skipping.")
         return None
     
     # Build relevant text for metabolite extraction.
