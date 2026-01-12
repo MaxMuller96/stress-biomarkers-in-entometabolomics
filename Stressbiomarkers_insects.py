@@ -44,6 +44,10 @@ def configure_worker_logging(log_queue):
     Configure logging for worker processes to send log records to a queue.
     This should be called at the start of each worker process.
     
+    NOTE: This function is infrastructure for future multiprocessing support.
+    When multiprocessing is added, call this in each worker process to enable
+    centralized logging via the queue.
+    
     Args:
         log_queue: A multiprocessing.Queue to send log records to the main process.
     """
@@ -708,17 +712,15 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
             print(f"[DEBUG] Results: {results}")
     return results
 
-from collections import defaultdict, Counter
-
 def main():
     """
     Main processing function. Supports both single-threaded and multiprocessing modes.
-    When using multiprocessing, pass use_multiprocessing=True to enable queue-based logging.
-    """
-    from collections import defaultdict, Counter
     
+    Queue-based logging is set up to provide infrastructure for future multiprocessing support.
+    The overhead in single-threaded mode is minimal (just a queue and listener thread).
+    """
     # Setup for potential multiprocessing with queue-based logging
-    # For single-threaded mode (current), this just maintains the existing logging
+    # Infrastructure ready for when multiprocessing is added in the future
     log_queue = Queue()
     listener = setup_logging_listener(log_queue, LOG_PATH)
     
