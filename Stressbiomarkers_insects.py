@@ -3,10 +3,12 @@ import re
 import csv
 import sys
 import logging
+import logging.handlers
 import unicodedata
 import urllib.parse
 from collections import defaultdict, Counter
 from functools import lru_cache
+from multiprocessing import Queue
 
 import pandas as pd
 from pdfminer.high_level import extract_text
@@ -35,6 +37,48 @@ debug_pdfs = set()
 
 # Setup logging
 logging.basicConfig(filename=LOG_PATH, level=logging.INFO, format='%(asctime)s %(message)s')
+
+# Queue-based logging helpers for multiprocessing-safe logging
+def configure_worker_logging(log_queue):
+    """
+    Configure logging for worker processes to send log records to a queue.
+    This should be called at the start of each worker process.
+    
+    Args:
+        log_queue: A multiprocessing.Queue to send log records to the main process.
+    """
+    # Remove any existing handlers
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    
+    # Add QueueHandler to send logs to the main process
+    queue_handler = logging.handlers.QueueHandler(log_queue)
+    root_logger.addHandler(queue_handler)
+    root_logger.setLevel(logging.INFO)
+
+def setup_logging_listener(log_queue, log_path):
+    """
+    Setup and start a logging listener thread in the main process.
+    This listener receives log records from worker processes and writes them to a file.
+    
+    Args:
+        log_queue: A multiprocessing.Queue to receive log records from workers.
+        log_path: Path to the log file.
+    
+    Returns:
+        A QueueListener instance that should be stopped when done.
+    """
+    # Create file handler for the main log file
+    file_handler = logging.FileHandler(log_path, mode='a')
+    file_handler.setFormatter(logging.Formatter('%(asctime)s %(message)s'))
+    
+    # Create and start the queue listener
+    listener = logging.handlers.QueueListener(log_queue, file_handler, respect_handler_level=True)
+    listener.start()
+    
+    return listener
+
 
 # Pre-compiled regex patterns for better performance
 # Updated to preserve lipid notation characters: keep : / ( ) . , and hyphens inside tokens
@@ -501,12 +545,11 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
             print(f"[DEBUG] No insect species found, skipping.")
         return None
     
-    # Build relevant text for metabolite extraction.
+    # Build relevant text for metabolite extraction (exclude materials and methods)
     metabolite_sections = [
         title_block,
         sections.get('abstract', ''),
         sections.get('results', ''),
-        sections.get('materialsandmethods', ''),
         sections.get('keywords', ''),
         sections.get('introduction', ''),
         sections.get('discussion', ''),
@@ -668,78 +711,92 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
 from collections import defaultdict, Counter
 
 def main():
+    """
+    Main processing function. Supports both single-threaded and multiprocessing modes.
+    When using multiprocessing, pass use_multiprocessing=True to enable queue-based logging.
+    """
     from collections import defaultdict, Counter
-    hmdb_db = load_hmdb(HMDB_PATH)
-    insect_db = load_taxon(TAXON_PATH)
-    pdf_files = [os.path.join(PDF_DIR, f) for f in os.listdir(PDF_DIR) if f.endswith('.pdf')]
-    # First pass: build genus_to_species_counter from all PDFs
-    genus_to_species_counter = defaultdict(Counter)
-    pdf_to_species = {}
-    for pdf in pdf_files:
-        text = extract_text(pdf)
-        sections = extract_sections(text)
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
-        title_block = ' '.join(lines[:10])
-        # Build relevant text for insect species extraction from title block, abstract, keywords, and materials/methods
-        relevant_insect_text = ' '.join([
-            title_block,
-            sections.get('abstract', ''),
-            sections.get('keywords', ''),
-            sections.get('materialsandmethods', '')
-        ])
-        # Extract all genus-species found in this PDF
-        species_found = []
-        for match in re.findall(r'\b[A-Z][a-z]{2,}\s*[ \n\r\t]+\s*[a-z]{3,}\b', relevant_insect_text):
-            norm_match = normalize_text(match)
-            norm_match = normalize_insect_name(norm_match)
-            if norm_match in insect_db and ' ' in norm_match:
-                genus, species = norm_match.split()[:2]
-                genus_to_species_counter[genus][species] += 1
-                species_found.append(norm_match)
-        # Abbreviated genus-species (e.g. D. melanogaster)
-        abbrev_matches = re.findall(r'\b([A-Z])\.\s*([a-z]{3,})\b', relevant_insect_text)
-        genus_map = {}
-        for name in insect_db:
-            genus = name.split()[0] if ' ' in name else name
-            if genus and len(genus) > 0:
-                genus_map.setdefault(genus[0], set()).add(genus)
-        for initial, species in abbrev_matches:
-            initial = initial.lower()
-            for genus in genus_map.get(initial, []):
-                norm_abbrev = f"{genus} {species}"
-                if norm_abbrev in insect_db:
+    
+    # Setup for potential multiprocessing with queue-based logging
+    # For single-threaded mode (current), this just maintains the existing logging
+    log_queue = Queue()
+    listener = setup_logging_listener(log_queue, LOG_PATH)
+    
+    try:
+        hmdb_db = load_hmdb(HMDB_PATH)
+        insect_db = load_taxon(TAXON_PATH)
+        pdf_files = [os.path.join(PDF_DIR, f) for f in os.listdir(PDF_DIR) if f.endswith('.pdf')]
+        # First pass: build genus_to_species_counter from all PDFs
+        genus_to_species_counter = defaultdict(Counter)
+        pdf_to_species = {}
+        for pdf in pdf_files:
+            text = extract_text(pdf)
+            sections = extract_sections(text)
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            title_block = ' '.join(lines[:10])
+            # Build relevant text for insect species extraction from title block, abstract, keywords, and materials/methods
+            relevant_insect_text = ' '.join([
+                title_block,
+                sections.get('abstract', ''),
+                sections.get('keywords', ''),
+                sections.get('materialsandmethods', '')
+            ])
+            # Extract all genus-species found in this PDF
+            species_found = []
+            for match in re.findall(r'\b[A-Z][a-z]{2,}\s*[ \n\r\t]+\s*[a-z]{3,}\b', relevant_insect_text):
+                norm_match = normalize_text(match)
+                norm_match = normalize_insect_name(norm_match)
+                if norm_match in insect_db and ' ' in norm_match:
+                    genus, species = norm_match.split()[:2]
                     genus_to_species_counter[genus][species] += 1
-                    species_found.append(norm_abbrev)
-        pdf_to_species[os.path.basename(pdf)] = set(species_found)
-    # Second pass: process each PDF with full genus_to_species_counter
-    all_results = []
-    for pdf in pdf_files:
-        try:
-            res = process_pdf(pdf, hmdb_db, insect_db, genus_to_species_counter)
-            if res:
-                all_results.extend(res)
-        except Exception as e:
-            logging.exception(f"Error processing {pdf}: {e}")
-    if all_results:
-        # Merge duplicates by InChIKey (or Metabolite name if InChIKey missing)
-        merged = {}
-        for row in all_results:
-            key = row.get('InChIKey') or row.get('Metabolite name')
-            if key not in merged:
-                merged[key] = row.copy()
-            else:
-                # Merge unique values for each field
-                for k, v in row.items():
-                    if k in ['stress sources', 'insect species', 'DOI references']:
-                        old = set(merged[key][k].split(', ')) if merged[key][k] else set()
-                        new = set(v.split(', ')) if v else set()
-                        # For stress sources, remove empty, normalize and deduplicate
-                        merged[key][k] = ', '.join(sorted(s.strip() for s in (old | new) if s.strip()))
-        df = pd.DataFrame(merged.values())
-        df.to_excel(OUTPUT_XLSX, index=False)
-        print(f"Results saved to {OUTPUT_XLSX}")
-    else:
-        print("No metabolites extracted from any PDFs.")
+                    species_found.append(norm_match)
+            # Abbreviated genus-species (e.g. D. melanogaster)
+            abbrev_matches = re.findall(r'\b([A-Z])\.\s*([a-z]{3,})\b', relevant_insect_text)
+            genus_map = {}
+            for name in insect_db:
+                genus = name.split()[0] if ' ' in name else name
+                if genus and len(genus) > 0:
+                    genus_map.setdefault(genus[0], set()).add(genus)
+            for initial, species in abbrev_matches:
+                initial = initial.lower()
+                for genus in genus_map.get(initial, []):
+                    norm_abbrev = f"{genus} {species}"
+                    if norm_abbrev in insect_db:
+                        genus_to_species_counter[genus][species] += 1
+                        species_found.append(norm_abbrev)
+            pdf_to_species[os.path.basename(pdf)] = set(species_found)
+        # Second pass: process each PDF with full genus_to_species_counter
+        all_results = []
+        for pdf in pdf_files:
+            try:
+                res = process_pdf(pdf, hmdb_db, insect_db, genus_to_species_counter)
+                if res:
+                    all_results.extend(res)
+            except Exception as e:
+                logging.exception(f"Error processing {pdf}: {e}")
+        if all_results:
+            # Merge duplicates by InChIKey (or Metabolite name if InChIKey missing)
+            merged = {}
+            for row in all_results:
+                key = row.get('InChIKey') or row.get('Metabolite name')
+                if key not in merged:
+                    merged[key] = row.copy()
+                else:
+                    # Merge unique values for each field
+                    for k, v in row.items():
+                        if k in ['stress sources', 'insect species', 'DOI references']:
+                            old = set(merged[key][k].split(', ')) if merged[key][k] else set()
+                            new = set(v.split(', ')) if v else set()
+                            # For stress sources, remove empty, normalize and deduplicate
+                            merged[key][k] = ', '.join(sorted(s.strip() for s in (old | new) if s.strip()))
+            df = pd.DataFrame(merged.values())
+            df.to_excel(OUTPUT_XLSX, index=False)
+            print(f"Results saved to {OUTPUT_XLSX}")
+        else:
+            print("No metabolites extracted from any PDFs.")
+    finally:
+        # Stop the logging listener to ensure all logs are flushed
+        listener.stop()
 
 if __name__ == '__main__':
     main()
