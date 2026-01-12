@@ -502,7 +502,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
         return None
     
     # Build relevant text for metabolite extraction.
-    # Excludes materials and methods section to avoid extracting metabolites used in methodology
+    # Excludes materials and methods section to avoid extracting metabolites used in methods
     metabolite_sections = [
         title_block,
         sections.get('abstract', ''),
