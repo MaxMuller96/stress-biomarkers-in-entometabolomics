@@ -652,7 +652,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter):
         results.append({
             'Metabolite name': m.get('NAME', ''),
             'InChIKey': m.get('INCHIKEY', ''),
-            'HMDB ID': m.get('ACCESSION', ''),
+            'HMDB ID': m.get('HMDB_ID', ''),
             'CHEMICAL_FORMULA': m.get('CHEMICAL_FORMULA', ''),
             'Average Mass': m.get('AVERAGE_MASS', ''),
             'Mono Mass': m.get('MONO_MASS', ''),
@@ -744,6 +744,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
