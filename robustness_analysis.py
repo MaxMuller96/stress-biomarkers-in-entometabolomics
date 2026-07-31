@@ -24,6 +24,11 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Set, Tuple
 
 import pandas as pd
+from Stressbiomarkers_insects import (
+    PDF_DIR as DEFAULT_PDF_DIR,
+    HMDB_PATH as DEFAULT_HMDB_PATH,
+    TAXON_PATH as DEFAULT_TAXON_PATH,
+)
 
 
 @dataclass(frozen=True)
@@ -193,10 +198,14 @@ def run_once(
 def main() -> None:
     ap = argparse.ArgumentParser(description="Run tokenization robustness grid and compute ROC points")
     ap.add_argument("--script-path", default="Stressbiomarkers_insects.py")
-    ap.add_argument("--pdf-dir", required=True)
-    ap.add_argument("--hmdb-path", required=True)
-    ap.add_argument("--taxon-path", required=True)
-    ap.add_argument("--gold-csv", required=True, help="CSV with columns: pdf, metabolite")
+    ap.add_argument("--pdf-dir", default=DEFAULT_PDF_DIR)
+    ap.add_argument("--hmdb-path", default=DEFAULT_HMDB_PATH)
+    ap.add_argument("--taxon-path", default=DEFAULT_TAXON_PATH)
+    ap.add_argument(
+        "--gold-csv",
+        default=str(Path(__file__).resolve().parent / "gold.csv"),
+        help="CSV with columns: pdf, metabolite",
+    )
     ap.add_argument("--work-dir", default="robustness_runs")
     ap.add_argument("--timeout-sec", type=int, default=7200)
 
