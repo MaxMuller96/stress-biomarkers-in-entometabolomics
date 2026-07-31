@@ -52,7 +52,7 @@ def parse_float_list(s: str) -> List[float]:
 
 
 def load_gold(gold_csv: Path) -> Dict[str, Set[str]]:
-    df = pd.read_csv(gold_csv)
+    df = pd.read_csv(gold_csv, sep=';', encoding='utf-8-sig')
     required = {"pdf", "metabolite"}
     missing = required - set(df.columns)
     if missing:
