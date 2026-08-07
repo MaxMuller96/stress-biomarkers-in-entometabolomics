@@ -80,6 +80,17 @@ _greek_translation = str.maketrans({
     '′': '', '″': '', '‴': '', '⁗': '', "'": '', '"': ''
 })
 
+# Technique/platform patterns
+TECHNIQUE_PATTERNS = {
+    "untargeted metabolomics": re.compile(r"\b(?:un[\-\s]?targeted|non[\-\s]?targeted)\s+metabolomics\b", re.IGNORECASE),
+    "targeted metabolomics": re.compile(r"\btargeted\s+metabolomics\b", re.IGNORECASE),
+    "LC-MS": re.compile(r"\bLC[\-\s]?MS(?:/MS)?\b|\bliquid chromatography[\-\s]mass spectrometr(?:y|ic)\b", re.IGNORECASE),
+    "LC-HRMS": re.compile(r"\bLC[\-\s]?(?:HRMS|high[\-\s]?resolution mass spectrometr(?:y|ic))\b", re.IGNORECASE),
+    "GC-MS": re.compile(r"\bGC[\-\s]?MS(?:/MS)?\b|\bgas chromatography[\-\s]mass spectrometr(?:y|ic)\b", re.IGNORECASE),
+    "GC-HRMS": re.compile(r"\bGC[\-\s]?(?:HRMS|high[\-\s]?resolution mass spectrometr(?:y|ic))\b", re.IGNORECASE),
+    "NMR": re.compile(r"\bNMR\b|\bnuclear magnetic resonance\b", re.IGNORECASE),
+}
+
 
 @lru_cache(maxsize=4096)
 def normalize(text):
@@ -318,6 +329,14 @@ def extract_stress_sources(text):
     return sorted(filtered_sources)
 
 
+def extract_techniques(text):
+    found = []
+    for label, pattern in TECHNIQUE_PATTERNS.items():
+        if pattern.search(text):
+            found.append(label)
+    return sorted(set(found))
+
+
 @lru_cache(maxsize=128)
 def _cached_extract_text(pdf_path):
     return extract_text(pdf_path)
@@ -432,6 +451,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
         sections.get('references', '')
     ])
     stress_sources = extract_stress_sources(relevant_stress_text)
+    techniques = extract_techniques(relevant_stress_text)
 
     dois = list(dict.fromkeys(extract_doi(text)))
     doi_reference = dois[0] if dois else ''
@@ -452,7 +472,8 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
             'superclass': superclass,
             'stress sources': ', '.join(sorted(set(s for s in stress_sources if s))),
             'insect species': ', '.join(normalized_insect_species),
-            'DOI references': doi_reference
+            'DOI references': doi_reference,
+            'techniques': ', '.join(techniques),
         })
     return results
 
@@ -537,13 +558,68 @@ def main():
                 merged[key] = row.copy()
             else:
                 for k, v in row.items():
-                    if k in ['stress sources', 'insect species', 'DOI references']:
+                    if k in ['stress sources', 'insect species', 'DOI references', 'techniques']:
                         old = set(merged[key][k].split(', ')) if merged[key][k] else set()
                         new = set(v.split(', ')) if v else set()
                         merged[key][k] = ', '.join(sorted(s.strip() for s in (old | new) if s.strip()))
 
         df = pd.DataFrame(merged.values())
-        df.to_excel(OUTPUT_XLSX, index=False)
+
+        # Summary per PDF: metabolites + techniques
+        per_pdf = {}
+        for row in merged.values():
+            pdf = row.get('source_pdf', '')
+            if pdf not in per_pdf:
+                per_pdf[pdf] = {
+                    'source_pdf': pdf,
+                    'metabolites': set(),
+                    'techniques': set(),
+                    'insect species': set(),
+                    'stress sources': set(),
+                    'DOI references': set(),
+                }
+
+            mname = row.get('Metabolite name', '').strip()
+            if mname:
+                per_pdf[pdf]['metabolites'].add(mname)
+
+            for t in (row.get('techniques', '') or '').split(','):
+                t = t.strip()
+                if t:
+                    per_pdf[pdf]['techniques'].add(t)
+
+            for s in (row.get('insect species', '') or '').split(','):
+                s = s.strip()
+                if s:
+                    per_pdf[pdf]['insect species'].add(s)
+
+            for s in (row.get('stress sources', '') or '').split(','):
+                s = s.strip()
+                if s:
+                    per_pdf[pdf]['stress sources'].add(s)
+
+            for d in (row.get('DOI references', '') or '').split(','):
+                d = d.strip()
+                if d:
+                    per_pdf[pdf]['DOI references'].add(d)
+
+        per_pdf_rows = []
+        for pdf, vals in per_pdf.items():
+            per_pdf_rows.append({
+                'source_pdf': pdf,
+                'n_metabolites': len(vals['metabolites']),
+                'metabolites': '; '.join(sorted(vals['metabolites'])),
+                'techniques': ', '.join(sorted(vals['techniques'])),
+                'insect species': ', '.join(sorted(vals['insect species'])),
+                'stress sources': ', '.join(sorted(vals['stress sources'])),
+                'DOI references': ', '.join(sorted(vals['DOI references'])),
+            })
+
+        df_pdf_summary = pd.DataFrame(per_pdf_rows).sort_values('source_pdf')
+
+        with pd.ExcelWriter(OUTPUT_XLSX, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name='metabolite_hits', index=False)
+            df_pdf_summary.to_excel(writer, sheet_name='per_pdf_summary', index=False)
         print(f"Results saved to {OUTPUT_XLSX}")
     else:
         print("No metabolites extracted from any PDFs.")
