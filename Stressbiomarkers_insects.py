@@ -84,10 +84,8 @@ _greek_translation = str.maketrans({
 TECHNIQUE_PATTERNS = {
     "untargeted metabolomics": re.compile(r"\b(?:un[\-\s]?targeted|non[\-\s]?targeted)\s+metabolomics\b", re.IGNORECASE),
     "targeted metabolomics": re.compile(r"\btargeted\s+metabolomics\b", re.IGNORECASE),
-    "LC-MS": re.compile(r"\b(?:U?H?PLC[\-\–\—\s]?)?MS(?:/MS)?\b|\b(?:UPLC|UHPLC|LC)[\-\–\—\s]?MS(?:/MS)?\b|\bliquid chromatography[\-\–\—\s]mass spectrometr(?:y|ic)\b", re.IGNORECASE),
-    "LC-HRMS": re.compile(r"\bLC[\-\–\—\s]?(?:HRMS|high[\-\–\—\s]?resolution mass spectrometr(?:y|ic))\b", re.IGNORECASE),
-    "GC-MS": re.compile(r"\bGC[\-\–\—\s]?MS(?:/MS)?\b|\bGCMS\b|\bgas chromatography[\-\–\—\s]*(?:mass spectrometry|mass spectrometr(?:y|ic))\b", re.IGNORECASE),
-    "GC-HRMS": re.compile(r"\bGC[\-\–\—\s]?(?:HRMS|high[\-\–\—\s]?resolution mass spectrometr(?:y|ic))\b", re.IGNORECASE),
+    "LC-MS": re.compile(r"\b(?:U?H?PLC|LC)[\-\–\—\s]?MS(?:/MS)?\b|\b(?:LC|U?H?PLC)[\-\–\—\s]?(?:HRMS|high[\-\–\—\s]?resolution mass spectrometr(?:y|ic))\b|\bliquid chromatography[\-\–\—\s]*(?:mass spectrometry|mass spectrometr(?:y|ic))\b", re.IGNORECASE),
+    "GC-MS": re.compile(r"\bGC[\-\–\—\s]?MS(?:/MS)?\b|\bGC[\-\–\—\s]?(?:HRMS|high[\-\–\—\s]?resolution mass spectrometr(?:y|ic))\b|\bgas chromatography[\-\–\—\s]*(?:mass spectrometry|mass spectrometr(?:y|ic))\b", re.IGNORECASE),
     "NMR": re.compile(r"\bNMR\b|\bnuclear magnetic resonance\b", re.IGNORECASE),
 }
 
