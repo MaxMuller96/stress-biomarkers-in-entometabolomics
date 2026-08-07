@@ -13,6 +13,7 @@ import pandas as pd
 from pdfminer.high_level import extract_text
 import requests
 from rapidfuzz import fuzz
+import xml.etree.ElementTree as ET
 
 csv.field_size_limit(sys.maxsize)
 
@@ -101,7 +102,12 @@ def extract_words(text):
     text = _hyphen_break_re.sub('', text)
     words = _word_re.findall(text)
     return [w for w in words if len(w) >= 3]
-
+    
+def _safe_text(elem, path, default=''):
+    node = elem.find(path)
+    if node is None or node.text is None:
+        return default
+    return node.text.strip()
 
 def extract_metabolite_tokens(text, token_min_len=TOKEN_MIN_LEN):
     text = _hyphen_break_re.sub('', text)
@@ -133,23 +139,61 @@ def is_single_element(formula):
 
 
 def load_hmdb(path):
+    """
+    Load HMDB metabolites from XML (hmdb_metabolites.xml-style).
+    Returns dict: normalized name/synonym -> metabolite row dict.
+    """
     db = {}
-    synonym_fields = ['SYNONYMS', 'SYNONYM', 'TRADITIONAL_NAME', 'IUPAC_NAME', 'COMMON_NAME']
 
-    with open(path, encoding='utf-8') as f:
-        reader = csv.DictReader(f, delimiter=HMDB_DELIMITER)
-        for row in reader:
-            name_norm = normalize(row['NAME'])
-            db[name_norm] = row
-            for field in synonym_fields:
-                if field in row and row[field]:
-                    synonyms = _synonym_separator_re.split(row[field])
-                    for syn in synonyms:
-                        syn = syn.strip()
-                        if syn:
-                            syn_norm = normalize(syn)
-                            if syn_norm and syn_norm not in db:
-                                db[syn_norm] = row
+    # Stream parse for large files
+    for event, elem in ET.iterparse(path, events=('end',)):
+        if elem.tag != 'metabolite':
+            continue
+
+        name = _safe_text(elem, 'name')
+        accession = _safe_text(elem, 'accession')
+        smiles = _safe_text(elem, 'smiles')
+        inchikey = _safe_text(elem, 'inchikey')
+        formula = _safe_text(elem, 'chemical_formula')
+        avg_mass = _safe_text(elem, 'average_molecular_weight')
+        mono_mass = _safe_text(elem, 'monisotopic_molecular_weight')
+
+        # HMDB taxonomy fields (from pasted XML)
+        hmdb_super_class = _safe_text(elem, 'taxonomy/super_class')
+        hmdb_class = _safe_text(elem, 'taxonomy/class')
+        hmdb_sub_class = _safe_text(elem, 'taxonomy/sub_class')
+
+        row = {
+            'NAME': name,
+            'HMDB_ID': accession,
+            'SMILES': smiles,
+            'INCHIKEY': inchikey,
+            'CHEMICAL_FORMULA': formula,
+            'AVERAGE_MASS': avg_mass,
+            'MONO_MASS': mono_mass,
+            'HMDB_SUPER_CLASS': hmdb_super_class,
+            'HMDB_CLASS': hmdb_class,
+            'HMDB_SUB_CLASS': hmdb_sub_class,
+        }
+
+        # Primary name
+        if name:
+            key = normalize(name)
+            if key and key not in db:
+                db[key] = row
+
+        # All XML synonyms
+        for syn in elem.findall('synonyms/synonym'):
+            if syn.text:
+                syn_txt = syn.text.strip()
+                if syn_txt:
+                    syn_key = normalize(syn_txt)
+                    if syn_key and syn_key not in db:
+                        db[syn_key] = row
+
+        # Free memory during iterparse
+        elem.clear()
+
     return db
 
 
@@ -458,20 +502,23 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
         logp = get_logp(m.get('INCHIKEY', ''))
         superclass = get_npclassifier_superclass(m.get('SMILES', ''), m.get('INCHIKEY', ''))
         results.append({
-            'source_pdf': pdf_name,
-            'Metabolite name': m.get('NAME', ''),
-            'InChIKey': m.get('INCHIKEY', ''),
-            'HMDB ID': m.get('HMDB_ID', ''),
-            'CHEMICAL_FORMULA': m.get('CHEMICAL_FORMULA', ''),
-            'Average Mass': m.get('AVERAGE_MASS', ''),
-            'Mono Mass': m.get('MONO_MASS', ''),
-            'LogP': logp,
-            'superclass': superclass,
-            'stress sources': ', '.join(sorted(set(s for s in stress_sources if s))),
-            'insect species': ', '.join(normalized_insect_species),
-            'DOI references': doi_reference,
-            'techniques': ', '.join(techniques),
-        })
+    'source_pdf': pdf_name,
+    'Metabolite name': m.get('NAME', ''),
+    'InChIKey': m.get('INCHIKEY', ''),
+    'HMDB ID': m.get('HMDB_ID', ''),
+    'CHEMICAL_FORMULA': m.get('CHEMICAL_FORMULA', ''),
+    'Average Mass': m.get('AVERAGE_MASS', ''),
+    'Mono Mass': m.get('MONO_MASS', ''),
+    'LogP': logp,
+    'superclass': superclass,  # from NPClassifier API (keep if useful)
+    'HMDB super_class': m.get('HMDB_SUPER_CLASS', ''),
+    'HMDB class': m.get('HMDB_CLASS', ''),
+    'HMDB sub_class': m.get('HMDB_SUB_CLASS', ''),  # <-- requested
+    'stress sources': ', '.join(sorted(set(s for s in stress_sources if s))),
+    'insect species': ', '.join(normalized_insect_species),
+    'DOI references': doi_reference,
+    'techniques': ', '.join(techniques),
+})
     return results
 
 
