@@ -84,10 +84,10 @@ _greek_translation = str.maketrans({
 TECHNIQUE_PATTERNS = {
     "untargeted metabolomics": re.compile(r"\b(?:un[\-\s]?targeted|non[\-\s]?targeted)\s+metabolomics\b", re.IGNORECASE),
     "targeted metabolomics": re.compile(r"\btargeted\s+metabolomics\b", re.IGNORECASE),
-    "LC-MS": re.compile(r"\bLC[\-\s]?MS(?:/MS)?\b|\bliquid chromatography[\-\s]mass spectrometr(?:y|ic)\b", re.IGNORECASE),
-    "LC-HRMS": re.compile(r"\bLC[\-\s]?(?:HRMS|high[\-\s]?resolution mass spectrometr(?:y|ic))\b", re.IGNORECASE),
-    "GC-MS": re.compile(r"\bGC[\-\s]?MS(?:/MS)?\b|\bgas chromatography[\-\s]mass spectrometr(?:y|ic)\b", re.IGNORECASE),
-    "GC-HRMS": re.compile(r"\bGC[\-\s]?(?:HRMS|high[\-\s]?resolution mass spectrometr(?:y|ic))\b", re.IGNORECASE),
+    "LC-MS": re.compile(r"\b(?:U?H?PLC[\-\–\—\s]?)?MS(?:/MS)?\b|\b(?:UPLC|UHPLC|LC)[\-\–\—\s]?MS(?:/MS)?\b|\bliquid chromatography[\-\–\—\s]mass spectrometr(?:y|ic)\b", re.IGNORECASE),
+    "LC-HRMS": re.compile(r"\bLC[\-\–\—\s]?(?:HRMS|high[\-\–\—\s]?resolution mass spectrometr(?:y|ic))\b", re.IGNORECASE),
+    "GC-MS": re.compile(r"\bGC[\-\–\—\s]?MS(?:/MS)?\b|\bGCMS\b|\bgas chromatography[\-\–\—\s]*(?:mass spectrometry|mass spectrometr(?:y|ic))\b", re.IGNORECASE),
+    "GC-HRMS": re.compile(r"\bGC[\-\–\—\s]?(?:HRMS|high[\-\–\—\s]?resolution mass spectrometr(?:y|ic))\b", re.IGNORECASE),
     "NMR": re.compile(r"\bNMR\b|\bnuclear magnetic resonance\b", re.IGNORECASE),
 }
 
@@ -443,7 +443,6 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
         title_block,
         sections.get('abstract', ''),
         sections.get('results', ''),
-        sections.get('materialsandmethods', ''),
         sections.get('keywords', ''),
         sections.get('introduction', ''),
         sections.get('discussion', ''),
@@ -451,7 +450,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
         sections.get('references', '')
     ])
     stress_sources = extract_stress_sources(relevant_stress_text)
-    techniques = extract_techniques(relevant_stress_text)
+    techniques = extract_techniques(sections.get('materialsandmethods', ''))
 
     dois = list(dict.fromkeys(extract_doi(text)))
     doi_reference = dois[0] if dois else ''
