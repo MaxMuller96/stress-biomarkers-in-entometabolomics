@@ -1,0 +1,30 @@
+Metabolite M6
+unknown 370
+methanol
+water
+phosphate
+ammonium
+triphosphate
+pyrophosphate
+acetone
+chloroform
+ammonia
+hydroxide
+sulphate
+formic acid
+phosphite
+ethyl formate
+methane
+selenite
+fenvalerate
+carbon dioxide
+nitric oxide
+hydrogen peroxide
+cryptochrome
+substance P
+acetic acid
+heme
+hemin
+vitamin A
+vitamin A2 and
+vitamin A2 aldehyde

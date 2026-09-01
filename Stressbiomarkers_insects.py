@@ -12,8 +12,9 @@ from functools import lru_cache
 import pandas as pd
 from pdfminer.high_level import extract_text
 import requests
-from rapidfuzz import fuzz
+from rapidfuzz import fuzz, process
 import xml.etree.ElementTree as ET
+import pickle
 
 csv.field_size_limit(sys.maxsize)
 
@@ -23,19 +24,19 @@ HMDB_MIN_SAMPLE_SIZE = 100  # Minimum bytes required for reliable delimiter dete
 HMDB_DELIMITER = ','  # Force comma delimiter for HMDB metabolite files
 
 # Paths (update as needed; can be overridden via CLI)
-PDF_DIR = r".../pdfs"
-HMDB_PATH = r".../hmdb_metabolites/metabolites-2025-06-20.txt"
-TAXON_PATH = r".../Taxon/Taxon.txt"
+PDF_DIR = r"D:/data/Max/stress-biomarkers-in-entometabolomics/pdfs_crossval"
+HMDB_PATH = r"D:/data/Max/stress-biomarkers-in-entometabolomics/hmdb_metabolites/hmdb_metabolites.xml"
+TAXON_PATH = r"D:/data/Max/stress-biomarkers-in-entometabolomics/Taxon/Taxon.txt"
 LOG_PATH = "skipped_papers.log"
-OUTPUT_XLSX = "metabolite_results.xlsx"
+OUTPUT_XLSX = "metabolite_results_fuzzy.xlsx"
 
 # Tunable extraction parameters (can be overridden via CLI)
-MAX_NGRAM = 10
-TOKEN_MIN_LEN = 2
-FUZZY_THRESHOLD = 88
-FUZZY_LEN_DIFF_RATIO = 0.40
-FUZZY_MIN_LEN = 4
-FUZZY_MAX_LEN = 72
+MAX_NGRAM = 2
+TOKEN_MIN_LEN = 3
+FUZZY_THRESHOLD = 70
+FUZZY_LEN_DIFF_RATIO = 0.5
+FUZZY_MIN_LEN = 2
+FUZZY_MAX_LEN = 80
 FUZZY_K = 12000
 FUZZY_M = 400
 
@@ -97,7 +98,15 @@ def normalize(text):
     text = _normalize_re.sub(' ', text)
     return ' '.join(text.split())
 
+def load_exceptions(path="exceptions.txt"):
+    with open(path, encoding="utf-8") as f:
+        return {
+            normalize(line.strip())
+            for line in f
+            if line.strip()
+        }
 
+EXCLUDED_METABOLITES = load_exceptions()
 def extract_words(text):
     text = _hyphen_break_re.sub('', text)
     words = _word_re.findall(text)
@@ -224,7 +233,6 @@ def load_hmdb(path):
         elem.clear()
 
     return db
-
 
 def normalize_text(text):
     return unicodedata.normalize("NFKD", text)
@@ -459,53 +467,114 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
     ngrams = generate_ngrams(tokens, max_n=cfg['max_n'])
     norm_ngrams = set(normalize(ng) for ng in ngrams)
 
-    matched = [hmdb_db[ng] for ng in norm_ngrams if ng in hmdb_db]
-    matched_norm_ngrams = set(ng for ng in norm_ngrams if ng in hmdb_db)
+    matched = []
+    matched_norm_ngrams = set()
+    seen_hmdb_ids = set()
+    for ng in norm_ngrams:
+        # EXACT MATCH
+        if ng in hmdb_db:
 
-    non_matched_ngrams = [ng for ng in norm_ngrams if ng not in matched_norm_ngrams]
-    fuzzy_matched = []
+            entry = hmdb_db[ng]
+
+            name = normalize(entry["NAME"])
+
+            if (
+                name in EXCLUDED_METABOLITES
+                ):
+                continue
+
+            hmdb_id = entry["HMDB_ID"]
+
+            if hmdb_id in seen_hmdb_ids:
+                continue
+
+            seen_hmdb_ids.add(hmdb_id)
+
+            matched.append(entry)
+            matched_norm_ngrams.add(ng)
+
+            continue
+        
+        # FUZZY FALLBACK
+    non_matched_ngrams = [
+        ng
+        for ng in norm_ngrams
+        if ng not in matched_norm_ngrams
+    ]
+    fuzzy_candidates = [
+        ng
+        for ng in non_matched_ngrams
+        if(
+            cfg['fuzzy_min_len']
+            <= len(ng)
+            <=cfg['fuzzy_max_len']
+        )
+    ]
+    fuzzy_candidates = sorted(
+        set(fuzzy_candidates),
+        key=len
+    )[:cfg['fuzzy_k']]
+
     fuzzy_match_count = 0
+    
+    for candidate in fuzzy_candidates:
+        if fuzzy_match_count >= cfg['fuzzy_m']:
+            break
+        
+        candidate_len = len(candidate)
+        
+        result = process.extractOne(
+            candidate,
+            HMDB_KEYS,
+            scorer=fuzz.token_ratio,
+            score_cutoff=cfg['fuzzy_threshold']
+        )
 
-    if non_matched_ngrams:
-        fuzzy_candidates = [ng for ng in non_matched_ngrams if cfg['fuzzy_min_len'] <= len(ng) <= cfg['fuzzy_max_len']]
-        fuzzy_candidates = sorted(set(fuzzy_candidates), key=len)[:cfg['fuzzy_k']]
+        if not result:
+            continue
 
-        hmdb_by_first_char = {}
-        hmdb_by_first_two_chars = {}
-        for hmdb_key in hmdb_db.keys():
-            if hmdb_key:
-                hmdb_by_first_char.setdefault(hmdb_key[0], []).append(hmdb_key)
-                if len(hmdb_key) >= 2:
-                    hmdb_by_first_two_chars.setdefault(hmdb_key[:2], []).append(hmdb_key)
+        best_match, score, _ = result
 
-        for candidate in fuzzy_candidates:
-            if fuzzy_match_count >= cfg['fuzzy_m']:
-                break
-            best_match = None
-            best_score = 0
-            candidate_len = len(candidate)
+        hmdb_len = len(best_match)
 
-            first_char = candidate[0] if candidate else ''
-            hmdb_subset = hmdb_by_first_char.get(first_char, [])
-            if not hmdb_subset and len(candidate) >= 2:
-                hmdb_subset = hmdb_by_first_two_chars.get(candidate[:2], [])
+        len_diff_ratio = (
+            abs(candidate_len - hmdb_len)
+            / max(candidate_len, hmdb_len)
+        )
 
-            for hmdb_key in hmdb_subset:
-                hmdb_len = len(hmdb_key)
-                len_diff_ratio = abs(candidate_len - hmdb_len) / max(candidate_len, hmdb_len)
-                if len_diff_ratio > cfg['fuzzy_len_diff_ratio']:
-                    continue
-                score = fuzz.token_ratio(candidate, hmdb_key)
-                if score >= cfg['fuzzy_threshold'] and score > best_score:
-                    best_score = score
-                    best_match = hmdb_key
+        if len_diff_ratio > cfg['fuzzy_len_diff_ratio']:
+            continue
+        entry = hmdb_db[best_match]
 
-            if best_match:
-                fuzzy_matched.append(hmdb_db[best_match])
-                fuzzy_match_count += 1
+        name = normalize(entry["NAME"])
 
-    matched.extend(fuzzy_matched)
-    matched = [m for m in matched if not is_single_element(m.get('CHEMICAL_FORMULA', ''))]
+        if name in EXCLUDED_METABOLITES:
+            continue
+        hmdb_id = entry["HMDB_ID"]
+
+        if hmdb_id in seen_hmdb_ids:
+            continue
+        print(
+            f"[FUZZY]"
+            f"'{candidate}'->"
+            f"'{best_match}' "
+            f"(score={score})"
+        )
+
+        seen_hmdb_ids.add(hmdb_id)
+
+        matched.append(entry)
+        matched_norm_ngrams.add(best_match)
+
+        fuzzy_match_count += 1
+    
+    matched = [
+        m 
+        for m in matched 
+        if not is_single_element(
+            m.get('CHEMICAL_FORMULA', '')
+        )
+    ]
 
     if not matched:
         return None
@@ -528,6 +597,12 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
 
     results = []
     for m in matched:
+        print("\nMATCH FOUND")
+        print("Name:", m.get('NAME'))
+        print("HMDB ID:", m.get('HMDB_ID'))
+        print("HMDB super_class:", m.get('HMDB_SUPER_CLASS'))
+        print("HMDB class:", m.get('HMDB_CLASS'))
+        print("HMDB sub_class:", m.get('HMDB_SUB_CLASS'))
         logp = get_logp(m.get('INCHIKEY', ''))
         superclass = get_npclassifier_superclass(m.get('SMILES', ''), m.get('INCHIKEY', ''))
         results.append({
@@ -584,15 +659,23 @@ def main():
     cfg = {
         'max_n': args.max_n,
         'token_min_len': args.token_min_len,
+        
         'fuzzy_threshold': args.fuzzy_threshold,
         'fuzzy_len_diff_ratio': args.fuzzy_len_diff_ratio,
         'fuzzy_min_len': args.fuzzy_min_len,
         'fuzzy_max_len': args.fuzzy_max_len,
+        
         'fuzzy_k': args.fuzzy_k,
         'fuzzy_m': args.fuzzy_m,
     }
 
     hmdb_db = load_hmdb(HMDB_PATH)
+    global HMDB_KEYS
+    HMDB_KEYS = list(hmdb_db.keys())
+
+    print(f"HMDB lookup keys: {len(HMDB_KEYS):,}")
+    print("HMDB entries:", len(hmdb_db))
+    print(hmdb_db.get(normalize("1-MHis")))
     insect_db = load_taxon(TAXON_PATH)
     pdf_files = [os.path.join(PDF_DIR, f) for f in os.listdir(PDF_DIR) if f.lower().endswith('.pdf')]
 
