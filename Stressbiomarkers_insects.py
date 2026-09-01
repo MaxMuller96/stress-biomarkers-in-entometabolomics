@@ -140,58 +140,87 @@ def is_single_element(formula):
 
 def load_hmdb(path):
     """
-    Load HMDB metabolites from XML (hmdb_metabolites.xml-style).
-    Returns dict: normalized name/synonym -> metabolite row dict.
+    Load HMDB metabolites from XML.
+    Returns:
+        dict: normalized name/synonym -> metabolite row dict
     """
+
     db = {}
 
-    # Stream parse for large files
-    for event, elem in ET.iterparse(path, events=('end',)):
-        if elem.tag != 'metabolite':
+    HMDB_NS = "{http://www.hmdb.ca}"
+
+    count = 0
+
+    for event, elem in ET.iterparse(path, events=("end",)):
+
+        # HMDB uses namespaces
+        if elem.tag != f"{HMDB_NS}metabolite":
             continue
 
-        name = _safe_text(elem, 'name')
-        accession = _safe_text(elem, 'accession')
-        smiles = _safe_text(elem, 'smiles')
-        inchikey = _safe_text(elem, 'inchikey')
-        formula = _safe_text(elem, 'chemical_formula')
-        avg_mass = _safe_text(elem, 'average_molecular_weight')
-        mono_mass = _safe_text(elem, 'monisotopic_molecular_weight')
+        count += 1
 
-        # HMDB taxonomy fields (from pasted XML)
-        hmdb_super_class = _safe_text(elem, 'taxonomy/super_class')
-        hmdb_class = _safe_text(elem, 'taxonomy/class')
-        hmdb_sub_class = _safe_text(elem, 'taxonomy/sub_class')
+        def get_text(parent, tag):
+            node = parent.find(f"{HMDB_NS}{tag}")
+            return node.text.strip() if node is not None and node.text else ""
+
+        name = get_text(elem, "name")
+        accession = get_text(elem, "accession")
+        smiles = get_text(elem, "smiles")
+        inchikey = get_text(elem, "inchikey")
+        formula = get_text(elem, "chemical_formula")
+        avg_mass = get_text(elem, "average_molecular_weight")
+        mono_mass = get_text(elem, "monisotopic_molecular_weight")
+
+        taxonomy = elem.find(f"{HMDB_NS}taxonomy")
+
+        hmdb_super_class = ""
+        hmdb_class = ""
+        hmdb_sub_class = ""
+
+        if taxonomy is not None:
+            hmdb_super_class = get_text(taxonomy, "super_class")
+            hmdb_class = get_text(taxonomy, "class")
+            hmdb_sub_class = get_text(taxonomy, "sub_class")
 
         row = {
-            'NAME': name,
-            'HMDB_ID': accession,
-            'SMILES': smiles,
-            'INCHIKEY': inchikey,
-            'CHEMICAL_FORMULA': formula,
-            'AVERAGE_MASS': avg_mass,
-            'MONO_MASS': mono_mass,
-            'HMDB_SUPER_CLASS': hmdb_super_class,
-            'HMDB_CLASS': hmdb_class,
-            'HMDB_SUB_CLASS': hmdb_sub_class,
+            "NAME": name,
+            "HMDB_ID": accession,
+            "SMILES": smiles,
+            "INCHIKEY": inchikey,
+            "CHEMICAL_FORMULA": formula,
+            "AVERAGE_MASS": avg_mass,
+            "MONO_MASS": mono_mass,
+            "HMDB_SUPER_CLASS": hmdb_super_class,
+            "HMDB_CLASS": hmdb_class,
+            "HMDB_SUB_CLASS": hmdb_sub_class,
         }
 
         # Primary name
         if name:
-            key = normalize(name)
-            if key and key not in db:
-                db[key] = row
+            db.setdefault(normalize(name), row)
 
-        # All XML synonyms
-        for syn in elem.findall('synonyms/synonym'):
-            if syn.text:
-                syn_txt = syn.text.strip()
-                if syn_txt:
-                    syn_key = normalize(syn_txt)
-                    if syn_key and syn_key not in db:
-                        db[syn_key] = row
+        # Synonyms
+        synonyms = elem.find(f"{HMDB_NS}synonyms")
+        if synonyms is not None:
 
-        # Free memory during iterparse
+            for syn in synonyms.findall(f"{HMDB_NS}synonym"):
+
+                if syn.text:
+                    syn_key = normalize(syn.text.strip())
+
+                    if syn_key:
+                        db.setdefault(syn_key, row)
+
+        # Debug first few metabolites only
+        if count <= 5:
+            print(
+                f"[HMDB LOAD] "
+                f"{accession} | "
+                f"{name} | "
+                f"subclass={hmdb_sub_class}"
+            )
+
+        # Free memory
         elem.clear()
 
     return db
