@@ -8,6 +8,7 @@ import urllib.parse
 import argparse
 from collections import defaultdict, Counter
 from functools import lru_cache
+from datetime import datetime
 
 import pandas as pd
 from pdfminer.high_level import extract_text
@@ -276,31 +277,6 @@ def get_logp(inchikey):
         pass
     return None
 
-
-@lru_cache(maxsize=2048)
-def get_npclassifier_superclass(smiles, inchikey):
-    result = None
-    if smiles:
-        url = f"https://npclassifier.ucsd.edu/classify?smiles={urllib.parse.quote(smiles)}"
-        if url in _requests_cache:
-            return _requests_cache[url]
-        try:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-            }
-            r = requests.get(url, headers=headers, timeout=15)
-            r.raise_for_status()
-            data = r.json()
-            if "superclass" in data:
-                result = data["superclass"][0] if data["superclass"] else ""
-            elif "superclass_results" in data:
-                result = data["superclass_results"][0] if data["superclass_results"] else ""
-            _requests_cache[url] = result
-        except Exception:
-            pass
-    return result
-
-
 def extract_sections(text):
     known_headers = {
         'abstract': 'abstract',
@@ -418,6 +394,8 @@ def _cached_extract_text(pdf_path):
 
 def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
     pdf_name = os.path.basename(pdf_path)
+    start_time = datetime.now()
+    print(f"[{start_time:%d-%m-%Y %H:%M}]" f"Starting PDF: {pdf_name}")
     text = _cached_extract_text(pdf_path) if pdf_name in debug_pdfs else extract_text(pdf_path)
     sections = extract_sections(text)
 
@@ -467,6 +445,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
         if ng in POSITIVE_MATCH_CACHE:
             entry = POSITIVE_MATCH_CACHE[ng]
             hmdb_id = entry["HMDB_ID"]
+            print(f"[POS CACHE HIT] {ng}")
 
             if hmdb_id not in seen_hmdb_ids:
                 seen_hmdb_ids.add(hmdb_id)
@@ -474,6 +453,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
             continue    
         # Already known to never match
         if ng in NEGATIVE_MATCH_CACHE:
+            print(f"[NEG CACHE HIT] {ng}")
             continue
 
         # EXACT MATCH
@@ -496,6 +476,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
             seen_hmdb_ids.add(hmdb_id)
 
             POSITIVE_MATCH_CACHE[ng] = entry
+            print(f"[POS CACHE ADD] {ng}")
             matched.append(entry)
             matched_norm_ngrams.add(ng)
 
@@ -525,8 +506,8 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
     
     for candidate in fuzzy_candidates:
         if fuzzy_match_count >= cfg['fuzzy_m']:
-            break
-        
+            break  
+
         candidate_len = len(candidate)
         
         result = process.extractOne(
@@ -537,6 +518,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
         )
 
         if not result:
+            print(f"[NEG CACHE ADD] {candidate}")
             NEGATIVE_MATCH_CACHE.add(ng)
             continue
 
@@ -574,6 +556,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
         seen_hmdb_ids.add(hmdb_id)
 
         POSITIVE_MATCH_CACHE[ng] = entry
+        print(f"[POS CACHE ADD] {ng}")
         matched.append(entry)
         matched_norm_ngrams.add(best_match)
 
@@ -615,9 +598,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
         print("HMDB class:", m.get('HMDB_CLASS'))
         print("HMDB sub_class:", m.get('HMDB_SUB_CLASS'))
         logp = get_logp(m.get('INCHIKEY', ''))
-        superclass = get_npclassifier_superclass(m.get('SMILES', ''), m.get('INCHIKEY', ''))
         results.append({
-    'source_pdf': pdf_name,
     'Metabolite name': m.get('NAME', ''),
     'InChIKey': m.get('INCHIKEY', ''),
     'HMDB ID': m.get('HMDB_ID', ''),
@@ -625,10 +606,9 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
     'Average Mass': m.get('AVERAGE_MASS', ''),
     'Mono Mass': m.get('MONO_MASS', ''),
     'LogP': logp,
-    'superclass': superclass,  # from NPClassifier API (keep if useful)
     'HMDB super_class': m.get('HMDB_SUPER_CLASS', ''),
     'HMDB class': m.get('HMDB_CLASS', ''),
-    'HMDB sub_class': m.get('HMDB_SUB_CLASS', ''),  # <-- requested
+    'HMDB sub_class': m.get('HMDB_SUB_CLASS', ''),
     'stress sources': ', '.join(sorted(set(s for s in stress_sources if s))),
     'insect species': ', '.join(normalized_insect_species),
     'DOI references': doi_reference,
