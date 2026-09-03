@@ -37,7 +37,7 @@ OUTPUT_XLSX = "metabolite_results_fuzzy.xlsx"
 # Tunable extraction parameters (can be overridden via CLI)
 MAX_NGRAM = 2
 TOKEN_MIN_LEN = 3
-FUZZY_THRESHOLD = 80
+FUZZY_THRESHOLD = 95
 FUZZY_LEN_DIFF_RATIO = 0.5
 FUZZY_MIN_LEN = 2
 FUZZY_MAX_LEN = 80
@@ -451,11 +451,9 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
         sections.get('abstract', ''),
         sections.get('results', ''),
         sections.get('keywords', ''),
-        sections.get('introduction', ''),
         sections.get('discussion', ''),
-        sections.get('conclusion', ''),
-        sections.get('references', '')
-    ]
+        sections.get('conclusion', '')
+            ]
     relevant_metabolite_text = ' '.join(metabolite_sections)
 
     tokens = extract_metabolite_tokens(relevant_metabolite_text, token_min_len=cfg['token_min_len'])
@@ -534,7 +532,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
         result = process.extractOne(
             candidate,
             HMDB_KEYS,
-            scorer=fuzz.token_ratio,
+            scorer=fuzz.WRatio,
             score_cutoff=cfg['fuzzy_threshold']
         )
 
