@@ -23,6 +23,10 @@ HMDB_DELIMITER_SAMPLE_SIZE = 8192  # Bytes to read for delimiter detection
 HMDB_MIN_SAMPLE_SIZE = 100  # Minimum bytes required for reliable delimiter detection
 HMDB_DELIMITER = ','  # Force comma delimiter for HMDB metabolite files
 
+#Define Caches
+POSITIVE_MATCH_CACHE = {}
+NEGATIVE_MATCH_CACHE = set()
+
 # Paths (update as needed; can be overridden via CLI)
 PDF_DIR = r"D:/data/Max/stress-biomarkers-in-entometabolomics/pdfs_crossval"
 HMDB_PATH = r"D:/data/Max/stress-biomarkers-in-entometabolomics/hmdb_metabolites/hmdb_metabolites.xml"
@@ -33,7 +37,7 @@ OUTPUT_XLSX = "metabolite_results_fuzzy.xlsx"
 # Tunable extraction parameters (can be overridden via CLI)
 MAX_NGRAM = 2
 TOKEN_MIN_LEN = 3
-FUZZY_THRESHOLD = 70
+FUZZY_THRESHOLD = 80
 FUZZY_LEN_DIFF_RATIO = 0.5
 FUZZY_MIN_LEN = 2
 FUZZY_MAX_LEN = 80
@@ -219,15 +223,6 @@ def load_hmdb(path):
 
                     if syn_key:
                         db.setdefault(syn_key, row)
-
-        # Debug first few metabolites only
-        if count <= 5:
-            print(
-                f"[HMDB LOAD] "
-                f"{accession} | "
-                f"{name} | "
-                f"subclass={hmdb_sub_class}"
-            )
 
         # Free memory
         elem.clear()
@@ -471,6 +466,18 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
     matched_norm_ngrams = set()
     seen_hmdb_ids = set()
     for ng in norm_ngrams:
+        if ng in POSITIVE_MATCH_CACHE:
+            entry = POSITIVE_MATCH_CACHE[ng]
+            hmdb_id = entry["HMDB_ID"]
+
+            if hmdb_id not in seen_hmdb_ids:
+                seen_hmdb_ids.add(hmdb_id)
+                matched.append(entry)
+            continue    
+        # Already known to never match
+        if ng in NEGATIVE_MATCH_CACHE:
+            continue
+
         # EXACT MATCH
         if ng in hmdb_db:
 
@@ -490,6 +497,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
 
             seen_hmdb_ids.add(hmdb_id)
 
+            POSITIVE_MATCH_CACHE[ng] = entry
             matched.append(entry)
             matched_norm_ngrams.add(ng)
 
@@ -531,6 +539,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
         )
 
         if not result:
+            NEGATIVE_MATCH_CACHE.add(ng)
             continue
 
         best_match, score, _ = result
@@ -544,6 +553,9 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
 
         if len_diff_ratio > cfg['fuzzy_len_diff_ratio']:
             continue
+        if not best_match:
+            NEGATIVE_MATCH_CACHE.add(candidate)
+
         entry = hmdb_db[best_match]
 
         name = normalize(entry["NAME"])
@@ -563,6 +575,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
 
         seen_hmdb_ids.add(hmdb_id)
 
+        POSITIVE_MATCH_CACHE[ng] = entry
         matched.append(entry)
         matched_norm_ngrams.add(best_match)
 
@@ -672,10 +685,6 @@ def main():
     hmdb_db = load_hmdb(HMDB_PATH)
     global HMDB_KEYS
     HMDB_KEYS = list(hmdb_db.keys())
-
-    print(f"HMDB lookup keys: {len(HMDB_KEYS):,}")
-    print("HMDB entries:", len(hmdb_db))
-    print(hmdb_db.get(normalize("1-MHis")))
     insect_db = load_taxon(TAXON_PATH)
     pdf_files = [os.path.join(PDF_DIR, f) for f in os.listdir(PDF_DIR) if f.lower().endswith('.pdf')]
 
@@ -779,7 +788,6 @@ def main():
         print(f"Results saved to {OUTPUT_XLSX}")
     else:
         print("No metabolites extracted from any PDFs.")
-
-
+   
 if __name__ == '__main__':
     main()
