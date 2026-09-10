@@ -29,21 +29,21 @@ POSITIVE_MATCH_CACHE = {}
 NEGATIVE_MATCH_CACHE = set()
 
 # Paths (update as needed; can be overridden via CLI)
-PDF_DIR = r"D:/data/Max/stress-biomarkers-in-entometabolomics/pdfs_crossval"
+PDF_DIR = r"D:/data/Max/stress-biomarkers-in-entometabolomics/pdfs"
 HMDB_PATH = r"D:/data/Max/stress-biomarkers-in-entometabolomics/hmdb_metabolites/hmdb_metabolites.xml"
 TAXON_PATH = r"D:/data/Max/stress-biomarkers-in-entometabolomics/Taxon/Taxon.txt"
 LOG_PATH = "skipped_papers.log"
-OUTPUT_XLSX = "metabolite_results_fuzzy.xlsx"
+OUTPUT_XLSX = "metabolite_results.xlsx"
 
 # Tunable extraction parameters (can be overridden via CLI)
 MAX_NGRAM = 2
 TOKEN_MIN_LEN = 3
-FUZZY_THRESHOLD = 95
-FUZZY_LEN_DIFF_RATIO = 0.5
-FUZZY_MIN_LEN = 2
-FUZZY_MAX_LEN = 80
-FUZZY_K = 12000
-FUZZY_M = 400
+FUZZY_THRESHOLD = 90
+FUZZY_LEN_DIFF_RATIO = 0.3
+FUZZY_MIN_LEN = 7
+FUZZY_MAX_LEN = 30
+FUZZY_K = 4000
+FUZZY_M = 50
 
 # List or set of PDF filenames for which to enable debug output
 # Add PDF filenames (e.g. {'file1.pdf', 'file2.pdf'}) to enable debug for specific files
