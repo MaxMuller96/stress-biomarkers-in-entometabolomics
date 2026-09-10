@@ -476,7 +476,6 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
             seen_hmdb_ids.add(hmdb_id)
 
             POSITIVE_MATCH_CACHE[ng] = entry
-            print(f"[POS CACHE ADD] {ng}")
             matched.append(entry)
             matched_norm_ngrams.add(ng)
 
@@ -518,7 +517,6 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
         )
 
         if not result:
-            print(f"[NEG CACHE ADD] {candidate}")
             NEGATIVE_MATCH_CACHE.add(ng)
             continue
 
@@ -556,7 +554,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
         seen_hmdb_ids.add(hmdb_id)
 
         POSITIVE_MATCH_CACHE[ng] = entry
-        print(f"[POS CACHE ADD] {ng}")
+        print(f"[POS CACHE ADD] {candidate}")
         matched.append(entry)
         matched_norm_ngrams.add(best_match)
 
@@ -696,25 +694,33 @@ def main():
     if all_results:
         merged = {}
         for row in all_results:
-            key = (row.get('source_pdf', ''), row.get('InChIKey') or row.get('Metabolite name'))
+            key = (row.get('DOI references', '') or row.get('InChIKey') or row.get('Metabolite name'))
             if key not in merged:
                 merged[key] = row.copy()
             else:
                 for k, v in row.items():
-                    if k in ['stress sources', 'insect species', 'DOI references', 'techniques']:
+                    if k in ['stress sources', 'insect species', 'techniques','DOI references']:
                         old = set(merged[key][k].split(', ')) if merged[key][k] else set()
                         new = set(v.split(', ')) if v else set()
                         merged[key][k] = ', '.join(sorted(s.strip() for s in (old | new) if s.strip()))
 
         df = pd.DataFrame(merged.values())
+        df["n_papers"] = df["DOI references"].apply(
+            lambda x: len(
+                {
+                    doi.strip()
+                    for doi in str(x).split(",")
+                    if doi.strip()
+                }
+            )
+        )
 
         # Summary per PDF: metabolites + techniques
         per_pdf = {}
         for row in merged.values():
-            pdf = row.get('source_pdf', '')
+            pdf = row.get('DOI references', '')
             if pdf not in per_pdf:
                 per_pdf[pdf] = {
-                    'source_pdf': pdf,
                     'metabolites': set(),
                     'techniques': set(),
                     'insect species': set(),
@@ -749,7 +755,6 @@ def main():
         per_pdf_rows = []
         for pdf, vals in per_pdf.items():
             per_pdf_rows.append({
-                'source_pdf': pdf,
                 'n_metabolites': len(vals['metabolites']),
                 'metabolites': '; '.join(sorted(vals['metabolites'])),
                 'techniques': ', '.join(sorted(vals['techniques'])),
@@ -758,7 +763,7 @@ def main():
                 'DOI references': ', '.join(sorted(vals['DOI references'])),
             })
 
-        df_pdf_summary = pd.DataFrame(per_pdf_rows).sort_values('source_pdf')
+        df_pdf_summary = pd.DataFrame(per_pdf_rows).sort_values('DOI references')
 
         with pd.ExcelWriter(OUTPUT_XLSX, engine='openpyxl') as writer:
             df.to_excel(writer, sheet_name='metabolite_hits', index=False)
