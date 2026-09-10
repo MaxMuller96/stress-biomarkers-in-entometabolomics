@@ -85,14 +85,14 @@ def load_predictions(output_xlsx: Path) -> Dict[str, Set[str]]:
         raise ValueError(
             "Prediction output must contain at least one of InChIKey or Metabolite name columns."
         )
-    if "source_pdf" not in df.columns:
+    if "DOI references" not in df.columns:
         raise ValueError(
-            "Prediction output is missing 'source_pdf'. Please update Stressbiomarkers_insects.py to include it in results."
+            "Prediction output is missing 'DOI references'. Please update Stressbiomarkers_insects.py to include it in results."
         )
 
     preds: Dict[str, Set[str]] = {}
     for _, row in df.iterrows():
-        pdf = str(row.get("source_pdf", "")).strip()
+        pdf = str(row.get("DOI references", "")).strip()
         if not pdf:
             continue
 
@@ -207,17 +207,17 @@ def main() -> None:
         help="CSV with columns: pdf, metabolite",
     )
     ap.add_argument("--work-dir", default="robustness_runs")
-    ap.add_argument("--timeout-sec", type=int, default=7200)
+    ap.add_argument("--timeout-sec", type=int, default=14000)
 
     # Sweep ranges
-    ap.add_argument("--max-n-values", default="4,6,8,10")
-    ap.add_argument("--token-min-len-values", default="2,3,4")
-    ap.add_argument("--fuzzy-threshold-values", default="82,86,90,94")
-    ap.add_argument("--fuzzy-len-diff-ratio-values", default="0.2,0.4,0.6")
-    ap.add_argument("--fuzzy-min-len-values", default="4")
-    ap.add_argument("--fuzzy-max-len-values", default="72")
-    ap.add_argument("--fuzzy-k-values", default="12000")
-    ap.add_argument("--fuzzy-m-values", default="400")
+    ap.add_argument("--max-n-values", default="2")
+    ap.add_argument("--token-min-len-values", default="3")
+    ap.add_argument("--fuzzy-threshold-values", default="90")
+    ap.add_argument("--fuzzy-len-diff-ratio-values", default="0.3")
+    ap.add_argument("--fuzzy-min-len-values", default="7")
+    ap.add_argument("--fuzzy-max-len-values", default="80")
+    ap.add_argument("--fuzzy-k-values", default="4000")
+    ap.add_argument("--fuzzy-m-values", default="50")
 
     args = ap.parse_args()
 
