@@ -363,7 +363,7 @@ def extract_insect_species(section_text, insect_db, debug_pdf=None):
     return []
 
 
-COMMON_STRESS_WORDS = set(['eukaryotic','certain','against','different','time','this','mass','produce','induced','cross'])
+COMMON_STRESS_WORDS = set(['mass','produce','fects','tive','induced','cross','facilitated','factors','better','high','higher','strong','weak','under','vation','increased','decreased','tion','its','it','itself','have','has','had','is','are','was','were','be','been','being','do','does','did','will','shall','can','could','may','might','must','should','the', 'a', 'in', 'to', 'of', 'for', 'by', 'with', 'as', 'on', 'at', 'from', 'and', 'or', 'nor', 'but', 'so', 'yet', 'all', 'any', 'during', 'meets', 'multiple', 'post', 'subsequent', 'when', 'adverse', 'affects', 'all', 'although', 'among', 'analysis', 'avoid', 'broadens', 'causes', 'causing', 'confers', 'controlling', 'critical', 'dative', 'different', 'greater', 'hardening', 'ical', 'idative', 'improved', 'induce', 'induces', 'lution', 'mal', 'mediate', 'otic', 'pathways', 'severe', 'showed', 'stronger', 'sublethal', 'term', 'their', 'that', 'upon', 'various', 'lution', 'avoid'])
 
 
 def extract_stress_sources(text):
@@ -506,7 +506,18 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
     for candidate in fuzzy_candidates:
         if fuzzy_match_count >= cfg['fuzzy_m']:
             break  
+        if candidate in POSITIVE_MATCH_CACHE:
+            entry = POSITIVE_MATCH_CACHE[candidate]
 
+            hmdb_id = entry["HMDB_ID"]
+            if hmdb_id not in seen_hmdb_ids:
+                seen_hmdb_ids.add(hmdb_id)
+                matched.append(entry)
+                print(f"[POS CACHE HIT] {candidate}")
+
+                continue 
+            if candidate in NEGATIVE_MATCH_CACHE:
+                continue   
         candidate_len = len(candidate)
         
         result = process.extractOne(
@@ -550,10 +561,10 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
             f"'{best_match}' "
             f"(score={score})"
         )
-
+        POSITIVE_MATCH_CACHE[candidate] = entry
+        
         seen_hmdb_ids.add(hmdb_id)
 
-        POSITIVE_MATCH_CACHE[ng] = entry
         print(f"[POS CACHE ADD] {candidate}")
         matched.append(entry)
         matched_norm_ngrams.add(best_match)
@@ -692,9 +703,10 @@ def main():
             logging.exception(f"Error processing {pdf}: {e}")
 
     if all_results:
+        print("RAW RESULTS", len(all_results))
         merged = {}
         for row in all_results:
-            key = (row.get('DOI references', '') or row.get('InChIKey') or row.get('Metabolite name'))
+            key = (row.get('InChIKey') or row.get('Metabolite name'))
             if key not in merged:
                 merged[key] = row.copy()
             else:
@@ -705,6 +717,7 @@ def main():
                         merged[key][k] = ', '.join(sorted(s.strip() for s in (old | new) if s.strip()))
 
         df = pd.DataFrame(merged.values())
+        print("MERGED RESULTS" ,len(df))
         df["n_papers"] = df["DOI references"].apply(
             lambda x: len(
                 {
@@ -717,21 +730,32 @@ def main():
 
         # Summary per PDF: metabolites + techniques
         per_pdf = {}
-        for row in merged.values():
-            pdf = row.get('DOI references', '')
+        for row in all_results:
+            pdf = row.get('DOI references', '').strip()
             if pdf not in per_pdf:
                 per_pdf[pdf] = {
                     'metabolites': set(),
                     'techniques': set(),
                     'insect species': set(),
                     'stress sources': set(),
-                    'DOI references': set(),
+                    'HMDB super_class':set(),
+                    'HMDB class':set(),
+                    'HMDB sub_class':set(),
                 }
 
             mname = row.get('Metabolite name', '').strip()
             if mname:
                 per_pdf[pdf]['metabolites'].add(mname)
-
+                super_class = row.get('HMDB super_class','.').strip()
+                if super_class:
+                    per_pdf[pdf]['HMDB super_class'].add(super_class)
+                HMDB_class = row.get('HMDB class','.').strip()
+                if HMDB_class:
+                    per_pdf[pdf]['HMDB class'].add(HMDB_class)
+                sub_class = row.get('HMDB sub_class','.').strip()
+                if sub_class:
+                    per_pdf[pdf]['HMDB sub_class'].add(sub_class)
+                
             for t in (row.get('techniques', '') or '').split(','):
                 t = t.strip()
                 if t:
@@ -747,21 +771,19 @@ def main():
                 if s:
                     per_pdf[pdf]['stress sources'].add(s)
 
-            for d in (row.get('DOI references', '') or '').split(','):
-                d = d.strip()
-                if d:
-                    per_pdf[pdf]['DOI references'].add(d)
-
         per_pdf_rows = []
         for pdf, vals in per_pdf.items():
             per_pdf_rows.append({
+                'DOI references':pdf,
                 'n_metabolites': len(vals['metabolites']),
                 'metabolites': '; '.join(sorted(vals['metabolites'])),
+                'HMDB super_class': '; '.join(sorted(vals['HMDB super_class'])),
+                'HMDB class': '; '.join(sorted(vals['HMDB class'])),
+                'HMDB sub_class': '; '.join(sorted(vals['HMDB sub_class'])),
                 'techniques': ', '.join(sorted(vals['techniques'])),
                 'insect species': ', '.join(sorted(vals['insect species'])),
                 'stress sources': ', '.join(sorted(vals['stress sources'])),
-                'DOI references': ', '.join(sorted(vals['DOI references'])),
-            })
+                })
 
         df_pdf_summary = pd.DataFrame(per_pdf_rows).sort_values('DOI references')
 
