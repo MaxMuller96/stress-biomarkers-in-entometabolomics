@@ -537,53 +537,48 @@ def process_pdf(pdf_path, combined_db, insect_db, genus_to_species_counter, cfg)
 
     tokens = extract_metabolite_tokens(relevant_metabolite_text, token_min_len=cfg['token_min_len'])
     ngrams = generate_ngrams(tokens, max_n=cfg['max_n'])
-    norm_ngrams = set(normalize(ng) for ng in ngrams)
+    queries_by_normalized = defaultdict(set)
+    for ng in ngrams:
+        queries_by_normalized[normalize(ng)].add(ng)
+    norm_ngrams = set(queries_by_normalized)
 
     matched = []
     matched_norm_ngrams = set()
     seen_hmdb_ids = set()
+    exact_matches_by_id = {}
+    exact_queries_by_id = defaultdict(set)
     for ng in norm_ngrams:
-        if ng in POSITIVE_MATCH_CACHE:
-            entry = POSITIVE_MATCH_CACHE[ng]
-            hmdb_id = entry["HMDB/LMP_ID"]
+        cached = POSITIVE_MATCH_CACHE.get(ng)
+        if cached and cached.get("MATCH_TYPE") == "EXACT":
+            entry = cached
             print(f"[POS CACHE HIT] {ng}")
-
-            if hmdb_id not in seen_hmdb_ids:
-                seen_hmdb_ids.add(hmdb_id)
-                matched.append(entry)
-            continue    
-        # Already known to never match
-        if ng in NEGATIVE_MATCH_CACHE:
-            print(f"[NEG CACHE HIT] {ng}")
+        elif ng in combined_db:
+            entry = combined_db[ng]
+        else:
             continue
 
-        # EXACT MATCH
-        if ng in combined_db:
+        name = normalize(entry["NAME"])
+        if name in EXCLUDED_METABOLITES:
+            continue
 
-            entry = combined_db[ng]
-
-            name = normalize(entry["NAME"])
-
-            if name in EXCLUDED_METABOLITES:
-                continue
-
-            hmdb_id = entry["HMDB/LMP_ID"]
-
-            if hmdb_id in seen_hmdb_ids:
-                continue
-
+        hmdb_id = entry["HMDB/LMP_ID"]
+        matched_norm_ngrams.add(ng)
+        exact_queries_by_id[hmdb_id].update(queries_by_normalized[ng])
+        if hmdb_id not in seen_hmdb_ids:
             seen_hmdb_ids.add(hmdb_id)
-
-            POSITIVE_MATCH_CACHE[ng] = entry
             entry_copy = entry.copy()
             entry_copy["MATCH_TYPE"] = "EXACT"
-
             matched.append(entry_copy)
-            matched_norm_ngrams.add(ng)
+            exact_matches_by_id[hmdb_id] = entry_copy
 
-            continue
+        cache_entry = entry.copy()
+        cache_entry["MATCH_TYPE"] = "EXACT"
+        POSITIVE_MATCH_CACHE[ng] = cache_entry
+
+    for hmdb_id, entry in exact_matches_by_id.items():
+        entry["FUZZY_QUERY"] = '\n'.join(sorted(exact_queries_by_id[hmdb_id]))
         
-        # FUZZY FALLBACK
+    # FUZZY FALLBACK
     non_matched_ngrams = [
         ng
         for ng in norm_ngrams
@@ -612,16 +607,21 @@ def process_pdf(pdf_path, combined_db, insect_db, genus_to_species_counter, cfg)
             continue
         if fuzzy_match_count >= cfg['fuzzy_m']:
             break  
-        if candidate in POSITIVE_MATCH_CACHE:
-            entry = POSITIVE_MATCH_CACHE[candidate]
+        cached = POSITIVE_MATCH_CACHE.get(candidate)
+        if cached and cached.get("MATCH_TYPE") == "FUZZY":
+            entry = cached
 
             hmdb_id = entry["HMDB/LMP_ID"]
             if hmdb_id not in seen_hmdb_ids:
                 seen_hmdb_ids.add(hmdb_id)
-                matched.append(entry)
+                matched.append(entry.copy())
+                fuzzy_match_count += 1
             print(f"[POS CACHE HIT] {candidate}")
 
             continue 
+        if candidate in NEGATIVE_MATCH_CACHE:
+            print(f"[NEG CACHE HIT] {candidate}")
+            continue
           
         candidate_len = len(candidate)
         
@@ -667,8 +667,6 @@ def process_pdf(pdf_path, combined_db, insect_db, genus_to_species_counter, cfg)
             f"'{best_match}' "
             f"(score={score})"
         )
-        POSITIVE_MATCH_CACHE[candidate] = entry
-        
         seen_hmdb_ids.add(hmdb_id)
 
         print(f"[POS CACHE ADD] {candidate}")
@@ -677,6 +675,7 @@ def process_pdf(pdf_path, combined_db, insect_db, genus_to_species_counter, cfg)
         entry_copy["MATCH_TYPE"] = "FUZZY"
         entry_copy["FUZZY_QUERY"] = candidate
         entry_copy["FUZZY_MATCH"] = best_match
+        POSITIVE_MATCH_CACHE[candidate] = entry_copy.copy()
         
         matched.append(entry_copy)
         matched_norm_ngrams.add(best_match)

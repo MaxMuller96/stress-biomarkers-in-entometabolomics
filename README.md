@@ -11,3 +11,13 @@ Download requirements.txt and place it in the project directory.
 In the terminal execute: cd "directory" and py -m pip install -r requirements.txt
 If the packages are installed, open the code in Spyder or Jupyter.
 Run the code.
+
+In the `metabolite_hits` sheet, `Fuzzy query` records the text used to
+identify each metabolite. For an `EXACT` match it lists all matching names,
+synonyms, systematic names, or abbreviations found in the paper, one per line.
+Matching is exact after normalization (including case and Greek-letter
+normalization); the displayed terms retain the extracted spelling. For a
+`FUZZY` match, the column contains the normalized query and `Fuzzy match`
+contains the normalized database term. Use `Match type`, `Database`, and
+`HMDB ID/LMP` to review the match; a database match does not by itself establish
+that the identification is valid.
