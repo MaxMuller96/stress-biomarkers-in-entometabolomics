@@ -53,22 +53,34 @@ class MatchQueryTests(unittest.TestCase):
 
         text = "βalanine Betaalanine Alternate Canonical Lipsyn Systematic Lipabbr"
         for _ in range(2):
-            results = {row["HMDB ID/LMP"]: row for row in self.extract(text, db)}
-            self.assertEqual(set(results), {"HMDB1", "LMP1"})
+            results = {
+                row["Metabolite name"]: row for row in self.extract(text, db)
+            }
+            self.assertEqual(set(results), {"Canonical", "Lipidname"})
             self.assertEqual(
-                set(results["HMDB1"]["Fuzzy query"].splitlines()),
+                set(results["Canonical"]["Fuzzy query"].splitlines()),
                 {"βalanine", "Betaalanine", "Alternate", "Canonical"},
             )
             self.assertEqual(
-                set(results["LMP1"]["Fuzzy query"].splitlines()),
+                set(results["Lipidname"]["Fuzzy query"].splitlines()),
+                {"Lipsyn", "Systematic", "Lipabbr"},
+            )
+            self.assertEqual(
+                set(results["Canonical"]["Matched name/synonym"].splitlines()),
+                {"betaalanine", "Alternate", "Canonical"},
+            )
+            self.assertEqual(
+                set(results["Lipidname"]["Matched name/synonym"].splitlines()),
                 {"Lipsyn", "Systematic", "Lipabbr"},
             )
             for row in results.values():
                 self.assertEqual(row["Match type"], "EXACT")
                 self.assertFalse(row["Fuzzy match"])
+                self.assertNotIn("HMDB ID/LMP", row)
 
         result = self.extract("Alternate", db)[0]
         self.assertEqual(result["Fuzzy query"], "Alternate")
+        self.assertEqual(result["Matched name/synonym"], "Alternate")
 
     def test_cached_fuzzy_match_remains_fuzzy(self):
         db = {
@@ -85,6 +97,8 @@ class MatchQueryTests(unittest.TestCase):
             self.assertEqual(result["Match type"], "FUZZY")
             self.assertEqual(result["Fuzzy query"], "abcdefghijklmnoz")
             self.assertEqual(result["Fuzzy match"], "abcdefghijklmnop")
+            self.assertEqual(result["Matched name/synonym"], "abcdefghijklmnop")
+            self.assertNotIn("HMDB ID/LMP", result)
 
     def test_exact_queries_are_written_to_workbook(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -118,6 +132,11 @@ class MatchQueryTests(unittest.TestCase):
             self.assertEqual(
                 set(rows.iloc[0]["Fuzzy query"].splitlines()), {"Canonical", "Alternate"}
             )
+            self.assertEqual(
+                set(rows.iloc[0]["Matched name/synonym"].splitlines()),
+                {"Canonical", "Alternate"},
+            )
+            self.assertNotIn("HMDB ID/LMP", rows.columns)
 
 
 if __name__ == "__main__":

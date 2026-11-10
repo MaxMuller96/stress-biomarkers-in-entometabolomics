@@ -16,8 +16,11 @@ In the `metabolite_hits` sheet, `Fuzzy query` records the text used to
 identify each metabolite. For an `EXACT` match it lists all matching names,
 synonyms, systematic names, or abbreviations found in the paper, one per line.
 Matching is exact after normalization (including case and Greek-letter
-normalization); the displayed terms retain the extracted spelling. For a
-`FUZZY` match, the column contains the normalized query and `Fuzzy match`
-contains the normalized database term. Use `Match type`, `Database`, and
-`HMDB ID/LMP` to review the match; a database match does not by itself establish
-that the identification is valid.
+normalization); the displayed query terms retain the extracted spelling.
+`Matched name/synonym` shows the exact name or synonym from the source database
+that matched, retaining its original spelling. For an `EXACT` match, it lists
+all matched database terms, one per line. For a `FUZZY` match, `Fuzzy query`
+contains the normalized query and `Fuzzy match` contains the normalized
+database term. The report omits HMDB/LMP IDs; use `Match type`, `Database`, and
+`Matched name/synonym` to review the match. A database match does not by itself
+establish that the identification is valid.

@@ -223,7 +223,7 @@ def load_hmdb(path):
 
         # Primary name
         if name:
-            db.setdefault(normalize(name), row)
+            db.setdefault(normalize(name), {**row, "MATCHED_TERM": name})
 
         # Synonyms
         synonyms = elem.find(f"{HMDB_NS}synonyms")
@@ -232,10 +232,11 @@ def load_hmdb(path):
             for syn in synonyms.findall(f"{HMDB_NS}synonym"):
 
                 if syn.text:
-                    syn_key = normalize(syn.text.strip())
+                    synonym = syn.text.strip()
+                    syn_key = normalize(synonym)
 
                     if syn_key:
-                        db.setdefault(syn_key, row)
+                        db.setdefault(syn_key, {**row, "MATCHED_TERM": synonym})
 
         # Free memory
         elem.clear()
@@ -306,18 +307,18 @@ def load_lipidmaps(path):
             "ABBREVIATION":fields.get("ABBREVIATION","")
         }
         if row["NAME"]:
-            db.setdefault(normalize(row["NAME"]),row)
+            db.setdefault(normalize(row["NAME"]), {**row, "MATCHED_TERM": row["NAME"]})
         systematic = fields.get("SYSTEMATIC_NAME", "")
         if systematic:
-            db.setdefault(normalize(systematic), row)
+            db.setdefault(normalize(systematic), {**row, "MATCHED_TERM": systematic})
         abbr = fields.get("ABBREVIATION","")
         if abbr:
-            db.setdefault(normalize(abbr),row)
+            db.setdefault(normalize(abbr), {**row, "MATCHED_TERM": abbr})
         synonyms = fields.get("SYNONYMS", "")
         for syn in re.split(r"[;\n|]",synonyms):
             syn = syn.strip()
             if syn:
-                db.setdefault(normalize(syn), row)
+                db.setdefault(normalize(syn), {**row, "MATCHED_TERM": syn})
     return db
 
 def build_combined_db(
@@ -547,6 +548,7 @@ def process_pdf(pdf_path, combined_db, insect_db, genus_to_species_counter, cfg)
     seen_hmdb_ids = set()
     exact_matches_by_id = {}
     exact_queries_by_id = defaultdict(set)
+    exact_terms_by_id = defaultdict(set)
     for ng in norm_ngrams:
         cached = POSITIVE_MATCH_CACHE.get(ng)
         if cached and cached.get("MATCH_TYPE") == "EXACT":
@@ -564,6 +566,7 @@ def process_pdf(pdf_path, combined_db, insect_db, genus_to_species_counter, cfg)
         hmdb_id = entry["HMDB/LMP_ID"]
         matched_norm_ngrams.add(ng)
         exact_queries_by_id[hmdb_id].update(queries_by_normalized[ng])
+        exact_terms_by_id[hmdb_id].add(entry.get("MATCHED_TERM", ng))
         if hmdb_id not in seen_hmdb_ids:
             seen_hmdb_ids.add(hmdb_id)
             entry_copy = entry.copy()
@@ -577,6 +580,7 @@ def process_pdf(pdf_path, combined_db, insect_db, genus_to_species_counter, cfg)
 
     for hmdb_id, entry in exact_matches_by_id.items():
         entry["FUZZY_QUERY"] = '\n'.join(sorted(exact_queries_by_id[hmdb_id]))
+        entry["MATCHED_TERM"] = '\n'.join(sorted(exact_terms_by_id[hmdb_id]))
         
     # FUZZY FALLBACK
     non_matched_ngrams = [
@@ -675,6 +679,7 @@ def process_pdf(pdf_path, combined_db, insect_db, genus_to_species_counter, cfg)
         entry_copy["MATCH_TYPE"] = "FUZZY"
         entry_copy["FUZZY_QUERY"] = candidate
         entry_copy["FUZZY_MATCH"] = best_match
+        entry_copy["MATCHED_TERM"] = entry.get("MATCHED_TERM", best_match)
         POSITIVE_MATCH_CACHE[candidate] = entry_copy.copy()
         
         matched.append(entry_copy)
@@ -713,7 +718,7 @@ def process_pdf(pdf_path, combined_db, insect_db, genus_to_species_counter, cfg)
     for m in matched:
         print("\nMATCH FOUND")
         print("Name:", m.get('NAME'))
-        print("HMDB/LMP ID:", m.get('HMDB/LMP_ID'))
+        print("Matched name/synonym:", m.get('MATCHED_TERM'))
         print("HMDB super_class:", m.get('HMDB_SUPER_CLASS'))
         print("HMDB class:", m.get('HMDB_CLASS'))
         print("HMDB sub_class:", m.get('HMDB_SUB_CLASS'))
@@ -721,7 +726,7 @@ def process_pdf(pdf_path, combined_db, insect_db, genus_to_species_counter, cfg)
         results.append({
     'Metabolite name': m.get('NAME', ''),
     'InChIKey': m.get('INCHIKEY', ''),
-    'HMDB ID/LMP': m.get('HMDB/LMP_ID', ''),
+    'Matched name/synonym': m.get('MATCHED_TERM', ''),
     'CHEMICAL_FORMULA': m.get('CHEMICAL_FORMULA', ''),
     'Average Mass': m.get('AVERAGE_MASS', ''),
     'Mono Mass': m.get('MONO_MASS', ''),
