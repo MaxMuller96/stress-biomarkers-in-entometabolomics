@@ -31,19 +31,20 @@ NEGATIVE_MATCH_CACHE = set()
 # Paths (update as needed; can be overridden via CLI)
 PDF_DIR = r"D:/data/Max/stress-biomarkers-in-entometabolomics/pdfs"
 HMDB_PATH = r"D:/data/Max/stress-biomarkers-in-entometabolomics/hmdb_metabolites/hmdb_metabolites.xml"
+LIPDMAPS_PATH = r"D:/data/Max/stress-biomarkers-in-entometabolomics/lipidmaps/lipidmaps.sdf"
 TAXON_PATH = r"D:/data/Max/stress-biomarkers-in-entometabolomics/Taxon/Taxon.txt"
 LOG_PATH = "skipped_papers.log"
 OUTPUT_XLSX = "metabolite_results.xlsx"
 
 # Tunable extraction parameters (can be overridden via CLI)
 MAX_NGRAM = 2
-TOKEN_MIN_LEN = 3
+TOKEN_MIN_LEN = 4
 FUZZY_THRESHOLD = 90
-FUZZY_LEN_DIFF_RATIO = 0.3
-FUZZY_MIN_LEN = 7
+FUZZY_LEN_DIFF_RATIO = 0.2
+FUZZY_MIN_LEN = 15
 FUZZY_MAX_LEN = 30
-FUZZY_K = 4000
-FUZZY_M = 50
+FUZZY_K = 2000
+FUZZY_M = 30
 
 # List or set of PDF filenames for which to enable debug output
 # Add PDF filenames (e.g. {'file1.pdf', 'file2.pdf'}) to enable debug for specific files
@@ -112,6 +113,17 @@ def load_exceptions(path="exceptions.txt"):
         }
 
 EXCLUDED_METABOLITES = load_exceptions()
+
+def load_fuzzy_exceptions(path="fuzzy_exceptions.txt"):
+    with open(path, encoding="utf-8") as f:
+        return {
+            normalize(line.strip())
+            for line in f
+            if line.strip()
+        }
+
+EXCLUDED_FUZZY_QUERIES = load_fuzzy_exceptions()
+
 def extract_words(text):
     text = _hyphen_break_re.sub('', text)
     words = _word_re.findall(text)
@@ -150,7 +162,6 @@ def extract_doi(text):
 
 def is_single_element(formula):
     return len(_element_re.findall(formula)) == 1
-
 
 def load_hmdb(path):
     """
@@ -198,7 +209,7 @@ def load_hmdb(path):
 
         row = {
             "NAME": name,
-            "HMDB_ID": accession,
+            "HMDB/LMP_ID": accession,
             "SMILES": smiles,
             "INCHIKEY": inchikey,
             "CHEMICAL_FORMULA": formula,
@@ -207,6 +218,7 @@ def load_hmdb(path):
             "HMDB_SUPER_CLASS": hmdb_super_class,
             "HMDB_CLASS": hmdb_class,
             "HMDB_SUB_CLASS": hmdb_sub_class,
+            "DATABASE_SOURCE": "HMDB",
         }
 
         # Primary name
@@ -230,6 +242,96 @@ def load_hmdb(path):
 
     return db
 
+def load_lipidmaps(path):
+    db = {}
+
+    with open(
+        path,
+        encoding="utf-8",
+        errors="ignore"
+    ) as f:
+        content = f.read()
+    records = content.split("$$$$")
+    for record in records:
+        record = record.strip()
+        if not record:
+            continue
+        fields = {}
+        current = None
+        buffer = []
+        for line in record.splitlines():
+            m = re.match(
+                r">\s*<(.+?)>",
+                line
+            )
+            if m:
+                if current:
+                    fields[current] = (
+                        "\n".join(buffer).strip()
+                    )
+                current = m.group(1)
+                buffer = []
+            elif current:
+                buffer.append(line)
+        if current:
+            fields[current] = (
+                "\n".join(buffer).strip()
+            )
+        lm_id = fields.get("LM_ID")
+        if not lm_id:
+            continue
+        row = {
+            "NAME":
+                fields.get("NAME", ""),
+            "HMDB/LMP_ID":
+                lm_id,
+            "SMILES":
+                fields.get("SMILES", ""),
+            "INCHIKEY":
+                fields.get("INCHI_KEY",""),
+            "CHEMICAL_FORMULA":
+                fields.get("FORMULA",""),
+            "AVERAGE_MASS":
+                fields.get("EXACT_MASS",""),
+            "MONO_MASS":
+                fields.get("EXACT_MASS",""),
+            "HMDB_SUPER_CLASS":
+                "",
+            "HMDB_CLASS":
+                fields.get("MAIN_CLASS",""),
+            "HMDB_SUB_CLASS":
+                fields.get("CATEGORY",""),
+            "DATABASE_SOURCE":
+                "LIPIDMAPS",
+            "ABBREVIATION":fields.get("ABBREVIATION","")
+        }
+        if row["NAME"]:
+            db.setdefault(normalize(row["NAME"]),row)
+        systematic = fields.get("SYSTEMATIC_NAME", "")
+        if systematic:
+            db.setdefault(normalize(systematic), row)
+        abbr = fields.get("ABBREVIATION","")
+        if abbr:
+            db.setdefault(normalize(abbr),row)
+        synonyms = fields.get("SYNONYMS", "")
+        for syn in re.split(r"[;\n|]",synonyms):
+            syn = syn.strip()
+            if syn:
+                db.setdefault(normalize(syn), row)
+    return db
+
+def build_combined_db(
+    hmdb_db,
+    lipid_db):
+    combined = hmdb_db.copy()
+    added = 0
+    for key, value in lipid_db.items():
+        if key not in combined:
+
+            combined[key] = value
+            added += 1
+    return combined
+
 def normalize_text(text):
     return unicodedata.normalize("NFKD", text)
 
@@ -243,7 +345,6 @@ def normalize_insect_name(name):
     name = _non_alpha_space_re.sub('', name)
     name = ' '.join(name.split()[:2])
     return name
-
 
 def load_taxon(path):
     insects = set()
@@ -392,7 +493,7 @@ def _cached_extract_text(pdf_path):
     return extract_text(pdf_path)
 
 
-def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
+def process_pdf(pdf_path, combined_db, insect_db, genus_to_species_counter, cfg):
     pdf_name = os.path.basename(pdf_path)
     start_time = datetime.now()
     print(f"[{start_time:%d-%m-%Y %H:%M}]" f"Starting PDF: {pdf_name}")
@@ -444,7 +545,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
     for ng in norm_ngrams:
         if ng in POSITIVE_MATCH_CACHE:
             entry = POSITIVE_MATCH_CACHE[ng]
-            hmdb_id = entry["HMDB_ID"]
+            hmdb_id = entry["HMDB/LMP_ID"]
             print(f"[POS CACHE HIT] {ng}")
 
             if hmdb_id not in seen_hmdb_ids:
@@ -457,18 +558,16 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
             continue
 
         # EXACT MATCH
-        if ng in hmdb_db:
+        if ng in combined_db:
 
-            entry = hmdb_db[ng]
+            entry = combined_db[ng]
 
             name = normalize(entry["NAME"])
 
-            if (
-                name in EXCLUDED_METABOLITES
-                ):
+            if name in EXCLUDED_METABOLITES:
                 continue
 
-            hmdb_id = entry["HMDB_ID"]
+            hmdb_id = entry["HMDB/LMP_ID"]
 
             if hmdb_id in seen_hmdb_ids:
                 continue
@@ -476,7 +575,10 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
             seen_hmdb_ids.add(hmdb_id)
 
             POSITIVE_MATCH_CACHE[ng] = entry
-            matched.append(entry)
+            entry_copy = entry.copy()
+            entry_copy["MATCH_TYPE"] = "EXACT"
+
+            matched.append(entry_copy)
             matched_norm_ngrams.add(ng)
 
             continue
@@ -504,32 +606,35 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
     fuzzy_match_count = 0
     
     for candidate in fuzzy_candidates:
+        candidate_norm = normalize(candidate)
+        if candidate_norm in EXCLUDED_FUZZY_QUERIES:
+            print(f"[FUZZY EXCLUDED] {candidate}")
+            continue
         if fuzzy_match_count >= cfg['fuzzy_m']:
             break  
         if candidate in POSITIVE_MATCH_CACHE:
             entry = POSITIVE_MATCH_CACHE[candidate]
 
-            hmdb_id = entry["HMDB_ID"]
+            hmdb_id = entry["HMDB/LMP_ID"]
             if hmdb_id not in seen_hmdb_ids:
                 seen_hmdb_ids.add(hmdb_id)
                 matched.append(entry)
-                print(f"[POS CACHE HIT] {candidate}")
+            print(f"[POS CACHE HIT] {candidate}")
 
-                continue 
-            if candidate in NEGATIVE_MATCH_CACHE:
-                continue   
+            continue 
+          
         candidate_len = len(candidate)
         
         result = process.extractOne(
             candidate,
-            HMDB_KEYS,
+            METABOLITE_KEYS,
             scorer=fuzz.WRatio,
             score_cutoff=cfg['fuzzy_threshold']
         )
 
         if not result:
-            NEGATIVE_MATCH_CACHE.add(ng)
-            continue
+            NEGATIVE_MATCH_CACHE.add(candidate)
+            continue 
 
         best_match, score, _ = result
 
@@ -544,14 +649,15 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
             continue
         if not best_match:
             NEGATIVE_MATCH_CACHE.add(candidate)
+            continue
 
-        entry = hmdb_db[best_match]
+        entry = combined_db[best_match]
 
         name = normalize(entry["NAME"])
 
         if name in EXCLUDED_METABOLITES:
             continue
-        hmdb_id = entry["HMDB_ID"]
+        hmdb_id = entry["HMDB/LMP_ID"]
 
         if hmdb_id in seen_hmdb_ids:
             continue
@@ -566,7 +672,13 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
         seen_hmdb_ids.add(hmdb_id)
 
         print(f"[POS CACHE ADD] {candidate}")
-        matched.append(entry)
+        entry_copy = entry.copy()
+        
+        entry_copy["MATCH_TYPE"] = "FUZZY"
+        entry_copy["FUZZY_QUERY"] = candidate
+        entry_copy["FUZZY_MATCH"] = best_match
+        
+        matched.append(entry_copy)
         matched_norm_ngrams.add(best_match)
 
         fuzzy_match_count += 1
@@ -594,7 +706,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
     ])
     stress_sources = extract_stress_sources(relevant_stress_text)
     techniques = extract_techniques(sections.get('materialsandmethods', ''))
-
+    
     dois = list(dict.fromkeys(extract_doi(text)))
     doi_reference = dois[0] if dois else ''
 
@@ -602,7 +714,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
     for m in matched:
         print("\nMATCH FOUND")
         print("Name:", m.get('NAME'))
-        print("HMDB ID:", m.get('HMDB_ID'))
+        print("HMDB/LMP ID:", m.get('HMDB/LMP_ID'))
         print("HMDB super_class:", m.get('HMDB_SUPER_CLASS'))
         print("HMDB class:", m.get('HMDB_CLASS'))
         print("HMDB sub_class:", m.get('HMDB_SUB_CLASS'))
@@ -610,7 +722,7 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
         results.append({
     'Metabolite name': m.get('NAME', ''),
     'InChIKey': m.get('INCHIKEY', ''),
-    'HMDB ID': m.get('HMDB_ID', ''),
+    'HMDB ID/LMP': m.get('HMDB/LMP_ID', ''),
     'CHEMICAL_FORMULA': m.get('CHEMICAL_FORMULA', ''),
     'Average Mass': m.get('AVERAGE_MASS', ''),
     'Mono Mass': m.get('MONO_MASS', ''),
@@ -618,11 +730,15 @@ def process_pdf(pdf_path, hmdb_db, insect_db, genus_to_species_counter, cfg):
     'HMDB super_class': m.get('HMDB_SUPER_CLASS', ''),
     'HMDB class': m.get('HMDB_CLASS', ''),
     'HMDB sub_class': m.get('HMDB_SUB_CLASS', ''),
+    'Database': m.get('DATABASE_SOURCE',''),
+    'Match type': m.get('MATCH_TYPE',''),
+    'Fuzzy query': m.get('FUZZY_QUERY',''),
+    'Fuzzy match': m.get('FUZZY_MATCH'),
     'stress sources': ', '.join(sorted(set(s for s in stress_sources if s))),
     'insect species': ', '.join(normalized_insect_species),
     'DOI references': doi_reference,
     'techniques': ', '.join(techniques),
-})
+    })
     return results
 
 
@@ -630,6 +746,8 @@ def parse_args():
     p = argparse.ArgumentParser(description='Extract stress biomarkers from insect papers')
     p.add_argument('--pdf-dir', default=PDF_DIR)
     p.add_argument('--hmdb-path', default=HMDB_PATH)
+    p.add_argument("--lipidmaps-path",default=LIPDMAPS_PATH)
+
     p.add_argument('--taxon-path', default=TAXON_PATH)
     p.add_argument('--log-path', default=LOG_PATH)
     p.add_argument('--output-xlsx', default=OUTPUT_XLSX)
@@ -652,6 +770,7 @@ def main():
     global PDF_DIR, HMDB_PATH, TAXON_PATH, LOG_PATH, OUTPUT_XLSX
     PDF_DIR = args.pdf_dir
     HMDB_PATH = args.hmdb_path
+    LIPIDMAPS_PATH = args.lipidmaps_path
     TAXON_PATH = args.taxon_path
     LOG_PATH = args.log_path
     OUTPUT_XLSX = args.output_xlsx
@@ -670,8 +789,18 @@ def main():
     }
 
     hmdb_db = load_hmdb(HMDB_PATH)
-    global HMDB_KEYS
-    HMDB_KEYS = list(hmdb_db.keys())
+    lipid_db = {}
+    if args.lipidmaps_path:
+        lipid_db = load_lipidmaps(
+            args.lipidmaps_path
+        )
+    combined_db = build_combined_db(
+        hmdb_db,
+        lipid_db
+    )
+    global METABOLITE_KEYS
+    METABOLITE_KEYS = list(combined_db.keys())
+    
     insect_db = load_taxon(TAXON_PATH)
     pdf_files = [os.path.join(PDF_DIR, f) for f in os.listdir(PDF_DIR) if f.lower().endswith('.pdf')]
 
@@ -696,7 +825,7 @@ def main():
     all_results = []
     for pdf in pdf_files:
         try:
-            res = process_pdf(pdf, hmdb_db, insect_db, genus_to_species_counter, cfg)
+            res = process_pdf(pdf, combined_db, insect_db, genus_to_species_counter, cfg)
             if res:
                 all_results.extend(res)
         except Exception as e:
@@ -716,7 +845,7 @@ def main():
                         new = set(v.split(', ')) if v else set()
                         merged[key][k] = ', '.join(sorted(s.strip() for s in (old | new) if s.strip()))
 
-        df = pd.DataFrame(merged.values())
+        df = pd.DataFrame(all_results)
         print("MERGED RESULTS" ,len(df))
         df["n_papers"] = df["DOI references"].apply(
             lambda x: len(
@@ -728,7 +857,6 @@ def main():
             )
         )
 
-        # Summary per PDF: metabolites + techniques
         per_pdf = {}
         for row in all_results:
             pdf = row.get('DOI references', '').strip()
@@ -744,7 +872,10 @@ def main():
                 }
 
             mname = row.get('Metabolite name', '').strip()
-            if mname:
+            if (
+                mname
+                and normalize(mname) not in EXCLUDED_METABOLITES
+            ):
                 per_pdf[pdf]['metabolites'].add(mname)
                 super_class = row.get('HMDB super_class','.').strip()
                 if super_class:

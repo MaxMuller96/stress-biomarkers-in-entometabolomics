@@ -79,7 +79,6 @@ def normalize_prediction_value(v: object) -> str:
 
 def load_predictions(output_xlsx: Path) -> Dict[str, Set[str]]:
     df = pd.read_excel(output_xlsx)
-
     required_any = [("InChIKey", "Metabolite name")]
     if not all(any(c in df.columns for c in group) for group in required_any):
         raise ValueError(
@@ -103,48 +102,40 @@ def load_predictions(output_xlsx: Path) -> Dict[str, Set[str]]:
             continue
 
         preds.setdefault(pdf, set()).add(key)
-    return preds
+    return preds   
 
 
 def compute_metrics(
     gold: Dict[str, Set[str]],
     preds: Dict[str, Set[str]],
-    universe: Set[str],
-) -> Dict[str, float]:
-    tp = fp = fn = tn = 0
+    ) -> Dict[str, float]:
+    tp = fp = fn = 0
 
     all_pdfs = set(gold.keys()) | set(preds.keys())
     for pdf in all_pdfs:
         g = gold.get(pdf, set())
         p = preds.get(pdf, set())
 
-        g_u = g & universe
-        p_u = p & universe
-
-        tp_set = p_u & g_u
-        fp_set = p_u - g_u
-        fn_set = g_u - p_u
-        tn_set = universe - (tp_set | fp_set | fn_set)
+        tp_set = p & g
+        fp_set = p - g
+        fn_set = g - p
 
         tp += len(tp_set)
         fp += len(fp_set)
         fn += len(fn_set)
-        tn += len(tn_set)
 
     tpr = tp / (tp + fn) if (tp + fn) else 0.0
-    fpr = fp / (fp + tn) if (fp + tn) else 0.0
     precision = tp / (tp + fp) if (tp + fp) else 0.0
     recall = tpr
+    Fscore = (2 * precision * recall)/(precision + recall) if (precision + recall) else 0.0
 
     return {
         "tp": tp,
         "fp": fp,
         "fn": fn,
-        "tn": tn,
-        "tpr": tpr,
-        "fpr": fpr,
         "precision": precision,
         "recall": recall,
+        "Fscore": Fscore
     }
 
 
@@ -211,13 +202,13 @@ def main() -> None:
 
     # Sweep ranges
     ap.add_argument("--max-n-values", default="2")
-    ap.add_argument("--token-min-len-values", default="3")
+    ap.add_argument("--token-min-len-values", default="4")
     ap.add_argument("--fuzzy-threshold-values", default="90")
-    ap.add_argument("--fuzzy-len-diff-ratio-values", default="0.3")
-    ap.add_argument("--fuzzy-min-len-values", default="7")
-    ap.add_argument("--fuzzy-max-len-values", default="80")
-    ap.add_argument("--fuzzy-k-values", default="4000")
-    ap.add_argument("--fuzzy-m-values", default="50")
+    ap.add_argument("--fuzzy-len-diff-ratio-values", default="0.2")
+    ap.add_argument("--fuzzy-min-len-values", default="15")
+    ap.add_argument("--fuzzy-max-len-values", default="30")
+    ap.add_argument("--fuzzy-k-values", default="2000")
+    ap.add_argument("--fuzzy-m-values", default="30")
 
     args = ap.parse_args()
 
@@ -231,11 +222,6 @@ def main() -> None:
 
     if not script_path.exists():
         raise FileNotFoundError(f"Script not found: {script_path}")
-
-    gold = load_gold(gold_csv)
-    universe = set()
-    for mets in gold.values():
-        universe |= mets
 
     max_n_vals = parse_int_list(args.max_n_values)
     token_min_len_vals = parse_int_list(args.token_min_len_values)
@@ -275,6 +261,9 @@ def main() -> None:
             f"_m{cfg.fuzzy_m}"
         )
         run_dir = work_dir / run_name
+        if run_dir.exists():
+            print(f"Skipping {run_name}: already completed")
+            continue
         run_dir.mkdir(parents=True, exist_ok=True)
 
         output_xlsx = run_dir / "metabolite_results.xlsx"
@@ -303,11 +292,9 @@ def main() -> None:
                     "tp": None,
                     "fp": None,
                     "fn": None,
-                    "tn": None,
-                    "tpr": None,
-                    "fpr": None,
                     "precision": None,
                     "recall": None,
+                    "Fscore": None,
                     "error": "script_failed_or_no_output",
                 }
             )
@@ -316,7 +303,9 @@ def main() -> None:
 
         try:
             preds = load_predictions(output_xlsx)
-            metrics = compute_metrics(gold, preds, universe)
+            gold = load_gold(gold_csv)
+            
+            metrics = compute_metrics(gold, preds)
             row.update(metrics)
             row["error"] = ""
         except Exception as ex:
@@ -326,10 +315,9 @@ def main() -> None:
                     "fp": None,
                     "fn": None,
                     "tn": None,
-                    "tpr": None,
-                    "fpr": None,
                     "precision": None,
                     "recall": None,
+                    "Fscore": None,
                     "error": f"metrics_error: {ex}",
                 }
             )
@@ -340,19 +328,7 @@ def main() -> None:
     summary_csv = work_dir / "robustness_summary.csv"
     summary_df.to_csv(summary_csv, index=False)
 
-    roc_df = (
-        summary_df.dropna(subset=["tpr", "fpr"]) 
-        .sort_values(["fpr", "tpr"]) 
-        [["run", "fpr", "tpr", "precision", "recall", "max_n", "token_min_len", "fuzzy_threshold", "fuzzy_len_diff_ratio", "fuzzy_min_len", "fuzzy_max_len", "fuzzy_k", "fuzzy_m"]]
-    )
-    roc_csv = work_dir / "roc_points.csv"
-    roc_df.to_csv(roc_csv, index=False)
-
-    best = summary_df.dropna(subset=["tpr", "fpr"]).sort_values(["tpr", "precision"], ascending=[False, False]).head(20)
-    best_csv = work_dir / "best_runs.csv"
-    best.to_csv(best_csv, index=False)
-
-    print(f"Done. Wrote:\n- {summary_csv}\n- {roc_csv}\n- {best_csv}")
+    print(f"Done. Wrote: {summary_csv}")
 
 
 if __name__ == "__main__":

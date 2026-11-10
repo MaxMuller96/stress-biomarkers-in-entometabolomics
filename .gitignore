@@ -9,6 +9,10 @@ __pycache__/
 venv/
 env/
 ENV/
+hmdb_metabolites/
+lipidmaps/
+robustness_runs/
+Taxon/
 
 # Output files
 *.xlsx
@@ -20,3 +24,4 @@ ENV/
 *.swp
 *.swo
 *~
+*.pdf

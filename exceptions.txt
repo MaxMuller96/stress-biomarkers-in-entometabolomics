@@ -1,4 +1,6 @@
 Metabolite M6
+glutamate glutamate
+lead
 unknown 370
 methanol
 water
@@ -380,6 +382,26 @@ Sinigrin
 2-Amino-4-hydroxy-6-pteridinecarboxylic acid
 Benzoyl ecgonine
 Dalamid
+Glutathione peroxide
+Sucrose phosphate
+Sesquiterpenes
+Nonadecenoic acid
+Lysozyme
+lysophosphatidylinositol
+D-sedoheptulose-1,7-bisphosphate
+Piperidines
+QUINOLONE DERIVATIVE
+1H-Indole-4,6-dicarboximidamide, 2-phenyl-
+N-Acetylcysteinamide
+Tenax GC
+N-Acetyl-D-cysteïne
+Trichloroacetic acid
+Molybdopterin precursor Z
+Phenylephrine
+Raloxifene
+fatty acid
+
+
 
 
 
